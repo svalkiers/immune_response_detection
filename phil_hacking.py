@@ -63,9 +63,6 @@ if 1: # compare cdr3 distances for tcrdist vs hashing
 
             rapD = squareform(pdist(vecs))
 
-            rapD_nbrs = get_nonself_nbrs_from_distances(rapD, num_nbrs)
-            assert len(rapD_nbrs) == num_nbrs*rapD.shape[0]
-
             if len(ms) == 1:
                 plt.subplot(1,2,ii+1)
                 plt.plot(rapD.ravel(), tcrD.ravel(), 'ro', markersize=5, alpha=0.1)
