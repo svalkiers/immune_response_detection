@@ -1,3 +1,4 @@
+######################################################################################88
 import raptcr
 from raptcr.constants.hashing import BLOSUM_62
 from raptcr.constants.base import AALPHABET
@@ -103,6 +104,12 @@ def get_nonself_nbrs_from_distances(D_in, num_nbrs):
     nbrs_set = set((i,n) for i,i_nbrs in enumerate(nbrs) for n in i_nbrs)
     return nbrs_set
 
+def get_nonself_nbrs_from_distances_by_radius(D_in, radius):
+    'Returns the set() of all neighbor pairs (i,j), not including i>=j pairs'
+    iis, jjs = np.nonzero(D_in<radius)
+    nbrs_set = set( (i,j) for i,j in zip(iis,jjs) if i<j)
+    return nbrs_set
+
 
 def compute_gapped_seqs_dists(seqs, force_metric_dim=None):
     ''' For sanity checking that our gapping procedure gives distances that
@@ -137,7 +144,7 @@ def compute_gapped_seqs_dists(seqs, force_metric_dim=None):
     return D
 
 
-if 1: # compare cdr3 distances for tcrdist vs gapped-encoding
+if 0: # compare cdr3 distances for tcrdist vs gapped-encoding
     from raptcr.analysis import Repertoire
     import tcrdist
     from tcrdist.tcr_distances import weighted_cdr3_distance
@@ -151,6 +158,7 @@ if 1: # compare cdr3 distances for tcrdist vs gapped-encoding
     #ks = [5,10,25,50,100,150]
     #ms = [4,8,16,32,64,128]
     ks = [10,20,40]
+    radii = [6.5,12.5,24.5]
     ms = [0,3,4,5,6,7,8,12,16,32,64]
 
     num_pos = 16 # the length of the trimmed/gapped sequences
@@ -180,6 +188,7 @@ if 1: # compare cdr3 distances for tcrdist vs gapped-encoding
     N = len(rep)
     print('computing TCRdist cdr3 distances:', N)
     start = timer()
+    # note that we are dividing by 3.0 here to remove the cdr3 weight applied in the fxn
     tcrD= np.array([weighted_cdr3_distance(x,y)/3.
                     for x in rep for y in rep]).reshape((N,N))
     print(f'computing TCRdist cdr3 distances took {timer()-start} seconds.')
@@ -225,12 +234,13 @@ if 1: # compare cdr3 distances for tcrdist vs gapped-encoding
             col = plot_ms.index(m)
             plt.subplot(1, ncols, col+1)
             plt.plot(rapD.ravel(), tcrD.ravel(), 'ro', markersize=5, alpha=0.1)
-            plt.xlabel('rapTCR dist')
+            plt.xlabel('naive-gapped-MDS-embedding dist')
             plt.ylabel('TCRdist')
             mn = max(plt.xlim()[0], plt.ylim()[0])
             mx = min(plt.xlim()[1], plt.ylim()[1])
             plt.plot([mn,mx], [mn,mx], ':k')
-            plt.title(f'rapTCR distance matrix: m= {m} SQRT= {SQRT}')
+            assert SQRT
+            plt.title(f'distance comparison for m={m} naive gapped embedding')
 
         for k in ks:
             if k >= len(rep):
@@ -249,6 +259,29 @@ if 1: # compare cdr3 distances for tcrdist vs gapped-encoding
             results.append(dict(
                 m = m,
                 k = k,
+                SQRT=SQRT,
+                nbr_overlap = nbr_overlap,
+                nbrdist_rvalue = reg.rvalue,
+                overall_rvalue = reg2.rvalue,
+            ))
+            print(results[-1])
+
+        for radius in radii:
+            tcrD_nbrs = get_nonself_nbrs_from_distances_by_radius(tcrD, radius)
+            rapD_nbrs = get_nonself_nbrs_from_distances_by_radius(rapD, radius)
+
+            #jaccard overlap
+            nbr_overlap = len(rapD_nbrs & tcrD_nbrs)/len(rapD_nbrs | tcrD_nbrs)
+            combo_nbrs_list =  list(tcrD_nbrs)+list(rapD_nbrs)
+            rapD_dists = [rapD[i,j] for i,j in combo_nbrs_list]
+            tcrD_dists = [tcrD[i,j] for i,j in combo_nbrs_list]
+
+            reg = linregress(rapD_dists, tcrD_dists)
+            reg2 = linregress(rapD.ravel(), tcrD.ravel())
+
+            results.append(dict(
+                m = m,
+                radius = radius,
                 SQRT=SQRT,
                 nbr_overlap = nbr_overlap,
                 nbrdist_rvalue = reg.rvalue,
@@ -313,7 +346,7 @@ if 0: # look at mds for tcrdist matrix
 
 
 
-if 0: # compare cdr3 distances for tcrdist vs hashing
+if 1: # compare cdr3 distances for tcrdist vs hashing
     # this was exploring the idea of creating the aa vectors for hashing
     # by using a low=dimensional MDS and then tiling those short vectors out
     # to create a length 64 (say) big vector
@@ -330,10 +363,12 @@ if 0: # compare cdr3 distances for tcrdist vs hashing
     #ks = [5,10,25,50,100,150]
     #ms = [4,8,16,32,64,128]
     ks = [10,20,40]
-    ms = [64]
-    tiling_ms = list(range(2,33))+[48,64]
-    tiling_ms[0] = 0
-    PLOTTING = False
+    radii = [6.5, 12.5, 24.5]
+    ms = [4,8,12,16,32,64,128,256]
+    #tiling_ms = list(range(2,33))+[48,64]
+    #tiling_ms[0] = 0
+    tiling_ms = [0]
+    plot_ms = [32,64,128,256]
     SQRT = True
 
     # read some epitope-specific paired tcrs
@@ -348,15 +383,16 @@ if 0: # compare cdr3 distances for tcrdist vs hashing
     N = df.shape[0]
     print('computing TCRdist cdr3 distances:', N)
     start = timer()
-    tcrD= np.array([weighted_cdr3_distance(x,y)
+    tcrD= np.array([weighted_cdr3_distance(x,y)/3.0
                     for x in df.junction_aa for y in df.junction_aa]).reshape((N,N))
     print(f'That took {timer()-start} seconds.')
 
 
-    if PLOTTING:
-        plt.figure(figsize=(12,6))
+    if plot_ms:
+        nrows, ncols = 2, len(plot_ms)
+        plt.figure(figsize=(ncols*4, nrows*4))
     results = []
-    for ii, dmtag in enumerate(['DEFAULT_DM','TCRDIST_DM']):
+    for row, dmtag in enumerate(['DEFAULT_DM','TCRDIST_DM']):
         dm = locals()[dmtag]
 
         if dmtag == 'TCRDIST_DM' and SQRT:
@@ -377,12 +413,15 @@ if 0: # compare cdr3 distances for tcrdist vs hashing
                 if SQRT:
                     rapD = rapD**2
 
-                if PLOTTING and len(ms) == 1:
-                    plt.subplot(1,2,ii+1)
+                if m in plot_ms:
+                    col = plot_ms.index(m)
+                    plt.subplot(nrows, ncols, row*ncols+col+1)
                     plt.plot(rapD.ravel(), tcrD.ravel(), 'ro', markersize=5, alpha=0.1)
-                    plt.xlabel('rapTCR dist')
-                    plt.ylabel('TCRdist')
-                    plt.title(f'rapTCR distance matrix: {dmtag} m= {m}')
+                    reg = linregress(rapD.ravel(), tcrD.ravel())
+                    plt.xlabel('rapTCR CDR3 distance')
+                    plt.ylabel('TCRdist CDR3 distance')
+                    plt.title(f'rapTCR distance matrix: {dmtag}\n'
+                              f'rapTCR m= {m} Rvalue= {reg.rvalue:.6f}')
 
                 for k in ks:
                     tcrD_nbrs = get_nonself_nbrs_from_distances(tcrD, k)
@@ -412,11 +451,59 @@ if 0: # compare cdr3 distances for tcrdist vs hashing
     results.to_csv(outfile, sep='\t', index=False)
     print('made:', outfile)
 
-    if PLOTTING and len(ms) == 1:
+    if plot_ms:
+        assert tiling_ms==[0]
         pngfile = f'cdr3dist_comparison_N{len(rep)}.png'
-        #pngfile = f'/home/pbradley/csdat/raptcr/cdr3dist_comparison_N{len(rep)}.png'
+        if SQRT:
+            pngfile = pngfile.replace('.png','_SQRT.png')
+        pngfile = '/home/pbradley/csdat/raptcr/'+pngfile
+        plt.tight_layout()
         plt.savefig(pngfile)
         print('made:', pngfile)
+
+
+if 0: # plot the naive-gapped embedding nbr overlaps
+    fname = 'cdr3dist_gapped_results_N924.tsv'
+    df = pd.read_table(fname)
+    df = df[~df.radius.isna()]
+    df = df[df.m>0] # m=0 means "exact" distances computed on the gapped seqs
+
+    radii = sorted(set(df.radius))
+    scorenames = 'nbr_overlap nbrdist_rvalue'.split()
+    ms = sorted(set(df.m))
+
+
+    nrows, ncols = 1, len(scorenames)
+
+    plt.figure(figsize=(6*ncols,6*nrows))
+    for col, scorename in enumerate(scorenames):
+        plt.subplot(nrows, ncols, col+1)
+        for radius in radii:
+            mask = (df.radius==radius)
+            labels = [f'{x}\n{16*x}' for x in ms]
+            #labels = [f'm={x},L={16*x}' for x in ms]
+            plt.plot(labels, df[mask][scorename], label=f'radius {radius}')
+            #plt.xlabel('m')
+            plt.xlabel('aa-embedding-dim, total-vector-len')
+            plt.ylabel(scorename)
+        if scorename == 'nbr_overlap':
+            msg = 'Jaccard overlap in {(i,j)} non-self neighbors w/ distance<radius'
+        else:
+            msg = 'Pearson R-value for distances between i,j nbr pairs'
+        plt.title(msg)
+
+
+        plt.legend()
+
+    plt.suptitle('Comparing TCRdist CDR3 distances to naive gapped embedding with '
+                 'the length of the trimmed+gapped sequence fixed at 16\n'
+                 'and various dimensions for the per-aa MDS '
+                 'embedding')
+    plt.tight_layout()
+    pngfile = fname[:-4]+'_plots.png'
+    pngfile = '/home/pbradley/csdat/raptcr/'+pngfile
+    plt.savefig(pngfile)
+    print('made:', pngfile)
 
 
 if 0: # plot the 'tiling_m' performance
