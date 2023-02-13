@@ -60,6 +60,18 @@ def trim_and_gap_cdr3(cdr3, num_pos, n_trim=3, c_trim=2):
     assert len(fullseq) == num_pos
     return fullseq
 
+def encode_sequence(seq, aa_vectors):
+    ''' Convert a sequence to a vector by lining up the aa_vectors
+
+    length of the vector will be dim * len(seq), where dim is the dimension of the
+    embedding given by aa_vectors
+    '''
+    dim = aa_vectors['A'].shape[0]
+    vec = np.zeros((len(seq)*dim,))
+    for i,aa in enumerate(seq):
+        vec[i*dim:(i+1)*dim] = aa_vectors[aa]
+    return vec
+
 def gapped_encode_cdr3(cdr3, aa_vectors, num_pos, n_trim=3, c_trim=2):
     ''' Convert a cdr3 of variable length to a fixed-length vector
     by trimming/gapping and then lining up the aa_vectors
@@ -67,19 +79,12 @@ def gapped_encode_cdr3(cdr3, aa_vectors, num_pos, n_trim=3, c_trim=2):
     length of the vector will be dim * num_pos, where dim is the dimension of the
     embedding given by aa_vectors
     '''
-    fullseq = trim_and_gap_cdr3(cdr3, num_pos, n_trim, c_trim)
-    assert len(fullseq) == num_pos
-    dim = aa_vectors['A'].shape[0]
-    vec = np.zeros((num_pos*dim,))
-    for i,aa in enumerate(fullseq):
-        vec[i*dim:(i+1)*dim] = aa_vectors[aa]
-    return vec
+    return encode_sequence(trim_and_gap_cdr3(cdr3, num_pos, n_trim, c_trim),
+                           aa_vectors)
 
 
-def gapped_encode_cdr3s(cdr3s, dim, num_pos, SQRT=True, n_trim=3, c_trim=2):
-    ''' Convert a list/Repertoire of cdr3s to fixed-length vectors
-    Uses the gapped_encode_cdr3 function above, and an aa embedding from MDS
-    of the tcrdist distance matrix.
+def calc_tcrdist_aa_vectors(dim, SQRT=True, verbose=False):
+    ''' Embed tcrdist distance matrix to Euclidean space
     '''
     dm = np.zeros((21,21))
     dm[:20,:20] = TCRDIST_DM
@@ -88,10 +93,89 @@ def gapped_encode_cdr3s(cdr3s, dim, num_pos, SQRT=True, n_trim=3, c_trim=2):
     if SQRT:
         dm = np.sqrt(dm) ## NOTE
     vecs, stress = calc_mds_vecs(dm, dim, return_stress=True)
-    print(f'encoding tcrdist aa+gap matrix, dim= {dim} stress= {stress}')
+    #print('vecs mean:', np.mean(vecs, axis=0)) #looks like they are already zeroed
+    vecs -= np.mean(vecs, axis=0) # I think this is unnecessary, but for sanity...
+    if verbose:
+        print(f'encoding tcrdist aa+gap matrix, dim= {dim} stress= {stress}')
     aa_vectors = {aa:v for aa,v in zip(AALPHABET+GAPCHAR, vecs)}
+    return aa_vectors
+
+
+
+def gapped_encode_cdr3s(cdr3s, dim, num_pos, SQRT=True, n_trim=3, c_trim=2):
+    ''' Convert a list/Repertoire of cdr3s to fixed-length vectors
+    Uses the gapped_encode_cdr3 function above, and an aa embedding from MDS
+    of the tcrdist distance matrix.
+    '''
+    aa_vectors = calc_tcrdist_aa_vectors(dim, SQRT=SQRT, verbose=True)
     return np.array([gapped_encode_cdr3(cdr3, aa_vectors, num_pos, n_trim, c_trim)
                      for cdr3 in cdr3s])
+
+
+def setup_gene_cdr_strings(organism, chain):
+    ''' returns dict mapping vgene names to concatenated cdr1-cdr2-cdr2.5 strings
+    columns without any sequence variation (e.g. all gaps) are removed
+    '''
+    from tcrdist.all_genes import all_genes
+    assert chain in ['A','B']
+    vgenes = [x for x in all_genes[organism] if x[2:4] == chain+'V']
+    gene_cdr_strings = {x:'' for x in vgenes}
+
+    oldgap = '.' # gap character in the all_genes dict
+    for icdr in range(3):
+        cdrs = [all_genes[organism][x].cdrs[icdr].replace(oldgap, GAPCHAR)
+                for x in vgenes]
+        L = len(cdrs[0])
+        for i in reversed(range(L)):
+            col = set(x[i] for x in cdrs)
+            if len(col) == 1:# no variation
+                #print('drop fixed col:', col, organism, chain, icdr, i)
+                cdrs = [x[:i]+x[i+1:] for x in cdrs]
+        for g, cdr in zip(vgenes, cdrs):
+            gene_cdr_strings[g] += cdr
+    return gene_cdr_strings
+
+
+
+def gapped_encode_tcr_chains(
+        tcrs,
+        organism,
+        chain,
+        aa_mds_dim,
+        v_column = 'v_call',
+        cdr3_column = 'junction_aa',
+        num_pos_cdr3=16,
+        cdr3_weight=3.0,
+):
+    ''' tcrs is a DataFrame with V and CDR3 information in the named columns
+    organism is 'human' or 'mouse'
+    chain is 'A' or 'B'
+    '''
+    assert organism in ['human','mouse']
+    assert chain in ['A','B']
+    aa_vectors = calc_tcrdist_aa_vectors(aa_mds_dim, SQRT=True, verbose=True)
+    gene_cdr_strings = setup_gene_cdr_strings(organism, chain)
+    num_pos_other_cdrs = len(next(iter(gene_cdr_strings.values())))
+    assert all(len(x)==num_pos_other_cdrs for x in gene_cdr_strings.values())
+
+    vec_len = aa_mds_dim * (num_pos_other_cdrs + num_pos_cdr3)
+    print('gapped_encode_tcr_chains: aa_mds_dim=', aa_mds_dim,
+          'num_pos_other_cdrs=', num_pos_other_cdrs,
+          'num_pos_cdr3=', num_pos_cdr3, 'vec_len=', vec_len)
+
+    vecs = []
+    for v, cdr3 in zip(tcrs[v_column], tcrs[cdr3_column]):
+        v_vec = encode_sequence(gene_cdr_strings[v], aa_vectors)
+        cdr3_vec = np.sqrt(cdr3_weight) * gapped_encode_cdr3(
+            cdr3, aa_vectors, num_pos_cdr3)
+        vecs.append(np.concatenate([v_vec, cdr3_vec]))
+    vecs = np.array(vecs)
+    assert vecs.shape == (tcrs.shape[0], vec_len)
+    return vecs
+
+
+
+
 
 
 def get_nonself_nbrs_from_distances(D_in, num_nbrs):
@@ -142,6 +226,156 @@ def compute_gapped_seqs_dists(seqs, force_metric_dim=None):
                 D[i,j] = dist
                 D[j,i] = dist
     return D
+
+
+
+if 1: # try encoding full tcr chains
+    #fname = './data/phil/conga_lit_db.tsv'
+    from scipy.spatial.distance import pdist, squareform
+    import tcrdist
+    from tcrdist.tcr_distances import TcrDistCalculator
+    from scipy.stats import linregress
+    organism = 'human'
+
+    fname = './data/phil/pregibon_tcrs.tsv'
+    df = pd.read_table(fname)
+
+    ms = [4,8,12,16,32,64]
+
+    tcrdister = TcrDistCalculator(organism)
+
+    nrows, ncols = 2, len(ms)
+    plt.figure(figsize=(4*ncols, 4*nrows))
+
+    for row, chain in enumerate('AB'):
+        v_column, cdr3_column = 'v'+chain.lower(), 'cdr3'+chain.lower()
+        tcrs = [(x[v_column],'',x[cdr3_column]) for _,x in df.iterrows()]
+        N = df.shape[0]
+        start = timer()
+        tcrD = np.array([tcrdister.single_chain_distance(x,y)
+                         for x in tcrs for y in tcrs]).reshape(N,N)
+        print(f'tcrdist calc: {timer()-start:.6f}')
+
+        for col,m in enumerate(ms):
+            plt.subplot(nrows, ncols, row*ncols+col+1)
+            start = timer()
+            vecs = gapped_encode_tcr_chains(
+                df, organism, chain, m, v_column=v_column,
+                cdr3_column=cdr3_column)
+            print(f'gapped_encode_tcr_chains: {m} {timer()-start:.6f}')
+
+            start = timer()
+            rapD = squareform(pdist(vecs))**2
+            print(f'pdist calc: {m} {timer()-start:.6f}')
+
+            reg = linregress(rapD.ravel(), tcrD.ravel())
+            plt.title(f'chain= {chain} aa_mds_dim= {m}\nveclen= {vecs.shape[1]} '
+                      f'Rvalue= {reg.rvalue:.6f}')
+            plt.scatter(rapD.ravel(), tcrD.ravel(), s=5)
+            plt.xlabel('encoded pdists')
+            plt.ylabel('tcrdists')
+    plt.tight_layout()
+    pngfile = f'vcdr3dist_comparisons_{df.shape[0]}.png'
+    pngfile = '/home/pbradley/csdat/raptcr/'+pngfile
+    plt.savefig(pngfile)
+    print('made:', pngfile)
+    #plt.show()
+    plt.close('all')
+
+
+
+
+
+if 0: # look at cdr lengths
+    from collections import Counter
+    from tcrdist.all_genes import all_genes
+
+    organism = 'human'
+    for ab in 'AB':
+
+        cdrs = setup_gene_cdr_strings(organism, ab)
+        vals = list(cdrs.values())
+        assert all(len(x) == len(vals[0]) for x in vals)
+        print('\n'.join(f'{len(x)} {x}' for x in vals[:10]))
+        continue
+
+        for icdr in range(3):
+            genes = [x for x in all_genes[organism] if x[2:4] == ab+'V']
+            cdrs = [all_genes[organism][x].cdrs[icdr] for x in genes]
+            lens = [len(x) - x.count('.') for x in cdrs]
+            print(ab, icdr, sorted(Counter(lens).most_common()))
+            cdrs = sorted(set(cdrs))
+            lens = [len(x) - x.count('.') for x in cdrs]
+            print(ab, icdr, sorted(Counter(lens).most_common()))
+            print('\n'.join(sorted(set(cdrs))))
+
+    if 0:
+        df = pd.read_table('data/example_repertoire.tsv')
+        counts = Counter(len(x) for x in df.junction_aa)
+        print(sorted((x,y/df.shape[0]) for x,y in counts.most_common()))
+
+if 0: # look at vgene distances
+    import seaborn as sns
+    from tcrdist.tcr_distances import compute_all_v_region_distances
+
+    dists = compute_all_v_region_distances('human')
+    vb_genes = sorted(x for x in dists if x[2]=='B' and 'OR' not in x)
+    va_genes = sorted(x for x in dists if x[2]=='A' and 'OR' not in x)
+    def get_gene_and_family(a):
+        g = a.split('*')[0]
+        num = int(g[4:].split('-')[0].split('/')[0])
+        return g, g[:4]+str(num)
+
+    seen = set()
+    genes = va_genes+vb_genes
+    max_d = 24.5
+    #max_d = 1e6
+    min_d = 0.5 #45.5
+    for a1 in genes:
+        g1,f1 = get_gene_and_family(a1)
+        for a2 in sorted(dists[a1].keys()):
+            g2,f2 = get_gene_and_family(a2)
+            if g1<g2:# and f1 == f2:
+                d = dists[a1][a2]
+                if d<=max_d and d>=min_d and (g1,g2) not in seen:
+                    seen.add((g1,g2))
+                    print(d, g1, g2, a2, a2)
+
+
+    # compare va to vb dists
+    dfl = []
+    for ab,genes in zip('AB',[va_genes, vb_genes]):
+        for a1 in genes:
+            g1,f1 = get_gene_and_family(a1)
+            for a2 in sorted(dists[a1].keys()):
+                g2,f2 = get_gene_and_family(a2)
+                if g1<g2:
+                    dfl.append(dict(
+                        ab=ab,
+                        a1=a1,
+                        g1=g1,
+                        a2=a2,
+                        g2=g2,
+                        #f1=f1,
+                        dist=dists[a1][a2],
+                    ))
+    df = pd.DataFrame(dfl)
+    df = df.sort_values('dist').drop_duplicates(['g1','g2'])
+    ma = df[df.ab=='A'].dist.median()
+    mb = df[df.ab=='B'].dist.median()
+    plt.figure()
+    sns.violinplot(data=df, x='ab', y='dist', order='AB')
+    xmn,xmx = plt.xlim()
+    plt.plot([xmn,xmx],[ma,ma],':k',zorder=2)
+    plt.plot([xmn,xmx],[mb,mb],':k',zorder=2)
+    plt.xlim((xmn,xmx))
+    plt.ylim((0,plt.ylim()[1]))
+    plt.title('TCRdist V gene distance distributions, alpha vs beta\n'
+              'Smallest dist pair per gene-pair (ie, dropping allele info)')
+    plt.tight_layout()
+    pngfile = '/home/pbradley/csdat/raptcr/tmp.png'
+    plt.savefig(pngfile)
+    print('made:', pngfile)
 
 
 if 0: # compare cdr3 distances for tcrdist vs gapped-encoding
@@ -346,7 +580,7 @@ if 0: # look at mds for tcrdist matrix
 
 
 
-if 1: # compare cdr3 distances for tcrdist vs hashing
+if 0: # compare cdr3 distances for tcrdist vs hashing
     # this was exploring the idea of creating the aa vectors for hashing
     # by using a low=dimensional MDS and then tiling those short vectors out
     # to create a length 64 (say) big vector
