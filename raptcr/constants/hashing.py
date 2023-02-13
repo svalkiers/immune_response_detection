@@ -47,3 +47,4 @@ def blosum_to_distance_matrix(blosum_matrix:np.ndarray, scaling_factor:float=0.2
     return distance_matrix
 
 DEFAULT_DM = blosum_to_distance_matrix(BLOSUM_62)
+TCRDIST_DM = np.sqrt(np.maximum(0., np.minimum(4., 4-BLOSUM_62)))

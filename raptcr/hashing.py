@@ -30,7 +30,7 @@ def positional_encoding(sequence_len:int, m:int, p=3) -> np.ndarray:
     return pow_cos_distances
 
 class Cdr3Hasher(BaseEstimator, TransformerMixin):
-    def __init__(self, distance_matrix:np.ndarray=DEFAULT_DM, m:int=32, p:float=9, trim_left:int=0, trim_right:int=0) -> None:
+    def __init__(self, distance_matrix:np.ndarray=DEFAULT_DM, m:int=32, p:float=9, trim_left:int=0, trim_right:int=0, scale:bool=True) -> None:
         """
         Locality-sensitive hashing for amino acid sequences. Hashes CDR3
         sequences of varying lengths into m-dimensional vectors, preserving
@@ -54,6 +54,7 @@ class Cdr3Hasher(BaseEstimator, TransformerMixin):
         self.p = p
         self.trim_left = trim_left
         self.trim_right = trim_right
+        self.scale = scale
 
     def __repr__(self):
         return f'Cdr3Hasher(m={self.m})'
@@ -71,7 +72,10 @@ class Cdr3Hasher(BaseEstimator, TransformerMixin):
         Create dictionary containing AA's and their corresponding hashes, of
         type str : np.ndarray[m].
         """
-        vecs = MDS(n_components=self.m, dissimilarity="precomputed", random_state=11, normalized_stress=False).fit_transform(self.distance_matrix)
+        if self.scale:
+            vecs = MDS(n_components=self.m, dissimilarity="precomputed", random_state=11, normalized_stress=False).fit_transform(self.distance_matrix)
+        else:
+            vecs = self.distance_matrix
         vecs_dict = {aa:vec for aa,vec in zip(AALPHABET, vecs)}
         return vecs_dict
 
