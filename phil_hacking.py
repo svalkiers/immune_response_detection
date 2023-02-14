@@ -116,15 +116,22 @@ def setup_gene_cdr_strings(organism, chain):
     ''' returns dict mapping vgene names to concatenated cdr1-cdr2-cdr2.5 strings
     columns without any sequence variation (e.g. all gaps) are removed
     '''
-    from tcrdist.all_genes import all_genes
+    # remove tcrdist dependency here
+    all_genes_df = pd.read_table('./data/phil/combo_xcr.tsv')
+    all_genes_df = all_genes_df[(all_genes_df.organism==organism)&
+                                (all_genes_df.chain==chain)&
+                                (all_genes_df.region=='V')]
+    assert all_genes_df.id.value_counts().max()==1
+    all_genes_df.set_index('id', inplace=True)
+    all_genes_df['cdrs'] = all_genes_df.cdrs.str.split(';')
+
     assert chain in ['A','B']
-    vgenes = [x for x in all_genes[organism] if x[2:4] == chain+'V']
+    vgenes = list(all_genes_df.index)
     gene_cdr_strings = {x:'' for x in vgenes}
 
     oldgap = '.' # gap character in the all_genes dict
     for icdr in range(3):
-        cdrs = [all_genes[organism][x].cdrs[icdr].replace(oldgap, GAPCHAR)
-                for x in vgenes]
+        cdrs = all_genes_df.cdrs.str.get(icdr).str.replace(oldgap,GAPCHAR,regex=False)
         L = len(cdrs[0])
         for i in reversed(range(L)):
             col = set(x[i] for x in cdrs)
