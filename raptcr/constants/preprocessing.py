@@ -7,13 +7,13 @@ def get_vgene_reference():
     '''
     return pd.read_csv('./raptcr/constants/vgene_to_cdr.txt', sep='\t')
 
-def add_cdr_columns(df:pd.DataFrame) -> pd.DataFrame:
+def add_cdr_columns(df:pd.DataFrame, vcol:str='v_call') -> pd.DataFrame:
     '''
     Adds CDR1 and CDR2 information to TCR sequences based on V gene allele annotation.
     '''
     vgene = get_vgene_reference()
-    df['cdr1'] = df.v_call.map(dict(zip(vgene['id'],vgene['cdr1'])))
-    df['cdr2'] = df.v_call.map(dict(zip(vgene['id'],vgene['cdr2'])))
+    df['cdr1_b_aa'] = df[vcol].map(dict(zip(vgene['id'],vgene['cdr1'])))
+    df['cdr2_b_aa'] = df[vcol].map(dict(zip(vgene['id'],vgene['cdr2'])))
     return df
 
 def to_tcrdist3_format(df:pd.DataFrame, vgenecol:str='v_call', jgenecol:str='j_call', cdr3col:str='junction_aa'):
