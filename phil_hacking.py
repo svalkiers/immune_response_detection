@@ -228,8 +228,75 @@ def compute_gapped_seqs_dists(seqs, force_metric_dim=None):
     return D
 
 
+if 1: # find v+cdr3 tcrdist nbrs in tcrb example dataset using naive gapped encoding
+    # playing around with pynndescent index
+    #
+    from tcrdist.all_genes import all_genes
+    from pynndescent import NNDescent
 
-if 1: # try encoding full tcr chains
+    organism = 'human'
+    chain = 'B'
+
+    # these are probably pseudogenes? Looks like they have a stop codon in their
+    # amino acid sequence:
+    bad_genes = set(x for x,y in all_genes[organism].items()
+                    if x.startswith('TRBV') and '*' in ''.join(y.cdrs))
+    print('bad_genes:', len(bad_genes), bad_genes)
+
+
+    df = pd.read_table('./data/example_repertoire.tsv')#.head(10000)
+    v_column, cdr3_column = 'v_call', 'junction_aa'
+
+    min_cdr3_len = 6
+    good_cdr3s = np.array(
+        [len(cdr3)>=min_cdr3_len and all(aa in AALPHABET for aa in cdr3)
+         for cdr3 in df[cdr3_column]])
+    print('bad_cdr3s in df:', (~good_cdr3s).sum())
+    #print(df[~good_cdr3s][cdr3_column])
+
+    bad_genes_mask = df[v_column].isin(bad_genes)
+    print('bad_genes in df:', bad_genes_mask.sum(),
+          df[bad_genes_mask][v_column].unique())
+    #print(df[bad_genes_mask].drop_duplicates(v_column))
+
+    df = df[good_cdr3s & ~bad_genes_mask]
+
+    assert all(x in all_genes[organism] for x in df[v_column].unique())
+
+    aa_mds_dim = 8 # per-aa MDS embedding dimension
+
+    start = timer()
+    vecs = gapped_encode_tcr_chains(
+        df, organism, chain, aa_mds_dim, v_column=v_column,
+        cdr3_column=cdr3_column)
+    print(f'gapped_encode_tcr_chains: {aa_mds_dim} {timer()-start:.6f}')
+
+    print('training the index...', vecs.shape)
+    start = timer()
+    index = NNDescent(
+        vecs, n_neighbors=10, diversify_prob=1.0, pruning_degree_multiplier=1.5,
+    )
+    print(f'training took {timer()-start:.3f}')
+    if 2: # dunno why it's faster the second time... maybe some import statements?
+        start = timer()
+        index = NNDescent(
+            vecs, n_neighbors=10, diversify_prob=1.0, pruning_degree_multiplier=1.5,
+        )
+        print(f'training AGAIN took {timer()-start:.3f}')
+
+    I,D = index.neighbor_graph
+
+    nndists = np.mean(D, axis=-1)
+
+    # show tcrs with smallest nndist
+    top_inds = np.argsort(nndists)[:100]
+
+    for ind in top_inds:
+        print(ind, nndists[ind], df.iloc[ind].tolist())
+
+
+
+if 0: # try encoding full tcr chains
     #fname = './data/phil/conga_lit_db.tsv'
     from scipy.spatial.distance import pdist, squareform
     import tcrdist
