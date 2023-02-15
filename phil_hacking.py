@@ -7,6 +7,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from timeit import default_timer as timer
 from sklearn.manifold import MDS
+from collections import Counter
 
 # It may be helpful to take the sqrt of this matrix if we are
 # going to use an L2 (Euclidean) distance in the embedding space...
@@ -16,6 +17,9 @@ from sklearn.manifold import MDS
 TCRDIST_DM = np.maximum(0., np.minimum(4., 4-BLOSUM_62))
 
 GAPCHAR = '-'
+
+# so I can import this file in jupyter notebooks: 'if MAIN:' instead of 'if 1:'
+MAIN = (__name__ == '__main__')
 
 def calc_mds_vecs(dm, n_components, return_stress = False):
     'Helper function to run MDS'
@@ -235,40 +239,220 @@ def compute_gapped_seqs_dists(seqs, force_metric_dim=None):
     return D
 
 
-if 1: # find v+cdr3 tcrdist nbrs in tcrb example dataset using naive gapped encoding
+def filter_out_bad_genes_and_cdr3s(
+        df,
+        v_column,
+        cdr3_column,
+        organism,
+        chain,
+        min_cdr3_len = 6,
+):
+    ''' returns filtered copy of df
+
+    removes tcrs with
+
+    * unrecognized V gene names
+    * V genes whos cdr1/cdr2/cdr2.5 contain '*' (probably pseudogenes?)
+    * CDR3s with non-AA characters or shorter than 6
+    '''
+    all_genes_df = pd.read_table('./data/phil/combo_xcr.tsv')
+    all_genes_df = all_genes_df[(all_genes_df.organism==organism)&
+                                (all_genes_df.chain==chain)&
+                                (all_genes_df.region=='V')]
+    known_genes = set(all_genes_df.id)
+    bad_genes = set(x.id for x in all_genes_df.itertuples()
+                    if '*' in x.cdrs)
+    print('bad_genes:', len(bad_genes), bad_genes)
+
+    good_cdr3s = np.array(
+        [len(cdr3)>=min_cdr3_len and all(aa in AALPHABET for aa in cdr3)
+         for cdr3 in df[cdr3_column]])
+    print('bad_cdr3s in df:', (~good_cdr3s).sum())
+
+    bad_genes_mask = df[v_column].isin(bad_genes)
+    print('bad_genes in df:', bad_genes_mask.sum(),
+          df[bad_genes_mask][v_column].unique())
+
+    unknown_genes_mask = ~df[v_column].isin(known_genes)
+    print('unkown_genes in df:', unknown_genes_mask.sum(),
+          df[unknown_genes_mask][v_column].unique())
+
+    return df[good_cdr3s & (~bad_genes_mask) & (~unknown_genes_mask)].copy()
+
+
+def parse_repertoire(
+        df,
+        organism,
+        chain,
+        v_column,
+        j_column,
+        cdr3_column,
+):
+    ''' Returns new dataframe with info on where the V/J regions of the
+    cdr3 amino acid sequence end/begin
+
+    columns of new dataframe: ['v', 'j', 'cdr3', 'v_part', 'ndn_part', 'j_part']
+
+    v_part is the part of the CDR3 that aligns with the V gene AA sequence
+    j_part is the part of the CDR3 that aligns with the J gene AA sequence
+    ndn_part is everything else (the middle; might be the empty string)
+
+    '''
+    all_genes_df = pd.read_table('./data/phil/combo_xcr.tsv')
+    all_genes_df = all_genes_df[(all_genes_df.organism==organism)&
+                                (all_genes_df.chain==chain)]
+
+    all_genes_df['cdr3'] = all_genes_df.cdrs.str.split(';').str.get(-1).str.replace(
+        '.','',regex=False)
+
+    v_df = all_genes_df[all_genes_df.region=='V'].set_index('id')['cdr3']
+    j_df = all_genes_df[all_genes_df.region=='J'].set_index('id')['cdr3']
+
+    assert all(x in j_df.index for x in df[j_column])
+
+    dfl = []
+    for ind,v,j,cdr3 in df[[v_column,j_column,cdr3_column]].itertuples(name=None):
+        v_cdr3 = v_df[v]
+        j_cdr3 = j_df[j]
+
+        v_idents = 0
+        for a,b in zip(v_cdr3, cdr3):
+            if a!=b:
+                break
+            else:
+                v_idents += 1
+
+        j_idents = 0
+        for a,b in zip(reversed(j_cdr3), reversed(cdr3)):
+            if a!=b:
+                break
+            else:
+                j_idents += 1
+
+        overlap = v_idents+j_idents - len(cdr3)
+        if overlap>0:
+            v_idents -= overlap//2
+            j_idents -= (overlap - overlap//2)
+
+        prefix = cdr3[:v_idents]
+        middle = cdr3[v_idents:len(cdr3)-j_idents]
+        suffix = cdr3[len(cdr3)-j_idents:]
+
+        assert prefix+middle+suffix == cdr3
+        if ind%25000==0:
+            print(f'{prefix:7s} {middle:12s} {suffix:12s} {cdr3} {v_cdr3} {j_cdr3}',
+                  ind, df.shape[0])
+
+        dfl.append(dict(
+            v=v,
+            j=j,
+            cdr3=cdr3,
+            v_part=prefix,
+            ndn_part=middle,
+            j_part=suffix,
+        ))
+
+    parsed_df = pd.DataFrame(dfl)
+
+    return parsed_df
+
+
+def resample_parsed_repertoire(parsed_df, num, verbose=False):
+    ''' Build a new random repertoire by mixing and matching cdr3 pieces
+    from a parsed repertoire.
+
+    match the CDR3 length distributions
+    '''
+
+    old_counts = Counter(parsed_df.cdr3.str.len())
+    new_counts = Counter() # the new cdr3 len counts
+
+    dfl = []
+    skipcount = 0 # diagnostics
+
+    while len(dfl)<num:
+        replace = num>parsed_df.shape[0]
+        v_parts = parsed_df.sample(num, replace=replace)
+        d_parts = parsed_df.sample(num, replace=replace)
+        j_parts = parsed_df.sample(num, replace=replace)
+
+        for vrow, drow, jrow in zip(v_parts.itertuples(),
+                                    d_parts.itertuples(),
+                                    j_parts.itertuples()):
+            counter= vrow.Index
+            if verbose and counter%10000==0:
+                print(counter, len(dfl), skipcount)
+            v = vrow.v
+            j = jrow.j
+            cdr3 = vrow.v_part + drow.ndn_part + jrow.j_part
+            l = len(cdr3)
+            if new_counts[l] < old_counts[l]:
+                dfl.append(dict(v=v, j=j, cdr3=cdr3))
+                new_counts[l] += 1
+
+                if len(dfl) >= num:
+                    break
+            else:
+                skipcount += 1
+
+    assert len(dfl) == num
+    return pd.DataFrame(dfl)
+
+
+if MAIN: # explore a super-simple background repertoire
+    from pynndescent import NNDescent
+
+    aa_mds_dim = 8 # per-aa MDS embedding dimension
+
+    organism, chain, v_column, cdr3_column = 'human', 'B','v_call', 'junction_aa'
+    j_column = 'j_call'
+    df = pd.read_table('./data/example_repertoire.tsv')#.head(10000)
+
+    df = filter_out_bad_genes_and_cdr3s(df, v_column, cdr3_column, organism, chain)
+
+    parsed_df = parse_repertoire(df, organism, chain, v_column, j_column, cdr3_column)
+
+    bg_df = resample_parsed_repertoire(parsed_df, df.shape[0])
+    bg_df.rename(columns={'v':v_column, 'cdr3':cdr3_column}, inplace=True)
+    fg_df = df
+
+    for tag, df in zip(['fg','bg'], [fg_df, bg_df]):
+
+        start = timer()
+        vecs = gapped_encode_tcr_chains(
+            df, organism, chain, aa_mds_dim, v_column=v_column,
+            cdr3_column=cdr3_column)
+        print(f'gapped_encode_tcr_chains: {aa_mds_dim} {timer()-start:.6f}')
+
+        print('training the index...', vecs.shape)
+        start = timer()
+        index = NNDescent(
+            vecs, n_neighbors=10, diversify_prob=1.0, pruning_degree_multiplier=1.5,
+        )
+        print(f'training took {timer()-start:.3f}')
+
+        I,D = index.neighbor_graph
+
+        nndists = np.mean(D**2, axis=-1)
+
+        # show tcrs with smallest nndist
+        top_inds = np.argsort(nndists)[:50]
+
+        for ii, ind in enumerate(top_inds):
+            print(f'{tag} {ii:3d} {nndists[ind]:7.2f} {ind:6d}',
+                  df.iloc[ind].tolist())
+
+if 0: # find v+cdr3 tcrdist nbrs in tcrb example dataset using naive gapped encoding
     # playing around with pynndescent index
     #
     from tcrdist.all_genes import all_genes
     from pynndescent import NNDescent
 
-    organism = 'human'
-    chain = 'B'
-
-    # these are probably pseudogenes? Looks like they have a stop codon in their
-    # amino acid sequence:
-    bad_genes = set(x for x,y in all_genes[organism].items()
-                    if x.startswith('TRBV') and '*' in ''.join(y.cdrs))
-    print('bad_genes:', len(bad_genes), bad_genes)
-
+    organism, chain, v_column, cdr3_column = 'human', 'B','v_call', 'junction_aa'
 
     df = pd.read_table('./data/example_repertoire.tsv')#.head(10000)
-    v_column, cdr3_column = 'v_call', 'junction_aa'
 
-    min_cdr3_len = 6
-    good_cdr3s = np.array(
-        [len(cdr3)>=min_cdr3_len and all(aa in AALPHABET for aa in cdr3)
-         for cdr3 in df[cdr3_column]])
-    print('bad_cdr3s in df:', (~good_cdr3s).sum())
-    #print(df[~good_cdr3s][cdr3_column])
-
-    bad_genes_mask = df[v_column].isin(bad_genes)
-    print('bad_genes in df:', bad_genes_mask.sum(),
-          df[bad_genes_mask][v_column].unique())
-    #print(df[bad_genes_mask].drop_duplicates(v_column))
-
-    df = df[good_cdr3s & ~bad_genes_mask]
-
-    assert all(x in all_genes[organism] for x in df[v_column].unique())
+    df = filter_out_bad_genes_and_cdr3s(df, v_column, cdr3_column, organism, chain)
 
     aa_mds_dim = 8 # per-aa MDS embedding dimension
 
