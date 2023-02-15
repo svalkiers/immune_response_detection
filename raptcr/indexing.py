@@ -74,6 +74,35 @@ class BaseIndex(ABC):
         D, I = self._search(x=hashes, k=k)
         return KnnResult(y, D, I, self.ids)
 
+    def _within_radius(self, x, r):
+        xq = np.expand_dims(x, axis=0)
+        return self.idx.range_search(x=xq, thresh=r)
+
+    def _report_radius(self, I, D, exclude_self:bool=True):
+        if exclude_self:
+            return [(self.ids[i],d) for (i,d) in zip(I,D) if d > 0]
+        else:
+            return [(self.ids[i],d) for (i,d) in zip(I,D)]
+
+    def radius_search(self, query:str, r:float, exclude_self=True):
+        """
+        ONLY COMPATIBLE WITH THE FOLLOWING INDEX STRUCTURES:
+        - IndexFlat
+        - IndexIVFFlat
+        - IndexScalarQuantizer
+        - IndexIVFScalarQuantizer
+        Retrieve all items that are within a radius around the query point.
+
+        Parameters
+        ----------
+        query : str
+            TCR sequence set as the centroid around which to query.
+        r : float
+            Radius.
+        """
+        q = self.hasher.transform(query).astype(np.float32)
+        lims, D, I = self._within_radius(x=q, r=r)
+        return self._report_radius(I, D)
 
 class FlatIndex(BaseIndex):
     """
@@ -178,7 +207,7 @@ class IvfIndex(BaseApproximateIndex):
             Number of centroids to search at query time. Higher n_probe means
             higher recall, but slower speed.
         """
-        idx = faiss.index_factory(64, f"IVF{n_centroids},Flat")
+        idx = faiss.index_factory(hasher.m, f"IVF{n_centroids},Flat")
         super().__init__(idx, hasher)
         self.n_probe = n_probe
 
