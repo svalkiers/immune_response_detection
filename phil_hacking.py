@@ -8,6 +8,11 @@ import matplotlib.pyplot as plt
 from timeit import default_timer as timer
 from sklearn.manifold import MDS
 from collections import Counter
+from sys import exit
+from os.path import exists
+from glob import glob
+from os import mkdir, system
+
 
 # It may be helpful to take the sqrt of this matrix if we are
 # going to use an L2 (Euclidean) distance in the embedding space...
@@ -17,6 +22,9 @@ from collections import Counter
 TCRDIST_DM = np.maximum(0., np.minimum(4., 4-BLOSUM_62))
 
 GAPCHAR = '-'
+
+DATADIR = '/home/pbradley/gitrepos/immune_response_detection/data/' # change me
+assert exists(DATADIR)
 
 # so I can import this file in jupyter notebooks: 'if MAIN:' instead of 'if 1:'
 MAIN = (__name__ == '__main__')
@@ -121,7 +129,7 @@ def setup_gene_cdr_strings(organism, chain):
     columns without any sequence variation (e.g. all gaps) are removed
     '''
     # remove tcrdist dependency here
-    all_genes_df = pd.read_table('./data/phil/combo_xcr.tsv')
+    all_genes_df = pd.read_table(DATADIR+'phil/combo_xcr.tsv')
     all_genes_df = all_genes_df[(all_genes_df.organism==organism)&
                                 (all_genes_df.chain==chain)&
                                 (all_genes_df.region=='V')]
@@ -246,38 +254,48 @@ def filter_out_bad_genes_and_cdr3s(
         organism,
         chain,
         min_cdr3_len = 6,
+        j_column=None,
 ):
     ''' returns filtered copy of df
 
     removes tcrs with
 
-    * unrecognized V gene names
+    * unrecognized V gene names (and J genes, if j_column != None)
     * V genes whos cdr1/cdr2/cdr2.5 contain '*' (probably pseudogenes?)
     * CDR3s with non-AA characters or shorter than 6
     '''
-    all_genes_df = pd.read_table('./data/phil/combo_xcr.tsv')
+    all_genes_df = pd.read_table(DATADIR+'phil/combo_xcr.tsv')
     all_genes_df = all_genes_df[(all_genes_df.organism==organism)&
-                                (all_genes_df.chain==chain)&
-                                (all_genes_df.region=='V')]
-    known_genes = set(all_genes_df.id)
-    bad_genes = set(x.id for x in all_genes_df.itertuples()
-                    if '*' in x.cdrs)
-    print('bad_genes:', len(bad_genes), bad_genes)
+                                (all_genes_df.chain==chain)]
+    # drop cdr3, since a '*' there might be trimmed back so it's OK...
+    all_genes_df['cdrs'] = all_genes_df.cdrs.str.split(';').str.slice(0,3).str.join(';')
 
-    good_cdr3s = np.array(
+    known_v_genes = set(all_genes_df[all_genes_df.region=='V'].id)
+    bad_v_genes = set(x.id for x in all_genes_df.itertuples()
+                      if x.region == 'V' and '*' in x.cdrs)
+    print('bad_v_genes:', len(bad_v_genes), bad_v_genes)
+
+    good_cdr3s_mask = np.array(
         [len(cdr3)>=min_cdr3_len and all(aa in AALPHABET for aa in cdr3)
          for cdr3 in df[cdr3_column]])
-    print('bad_cdr3s in df:', (~good_cdr3s).sum())
+    print('bad_cdr3s in df:', (~good_cdr3s_mask).sum())
 
-    bad_genes_mask = df[v_column].isin(bad_genes)
-    print('bad_genes in df:', bad_genes_mask.sum(),
-          df[bad_genes_mask][v_column].unique())
+    bad_v_genes_mask = df[v_column].isin(bad_v_genes)
+    print('bad_v_genes in df:', bad_v_genes_mask.sum(),
+          df[bad_v_genes_mask][v_column].unique())
 
-    unknown_genes_mask = ~df[v_column].isin(known_genes)
-    print('unkown_genes in df:', unknown_genes_mask.sum(),
+    unknown_genes_mask = ~df[v_column].isin(known_v_genes)
+    print('unknown_genes in df:', unknown_genes_mask.sum(),
           df[unknown_genes_mask][v_column].unique())
+    if j_column is not None:
+        known_j_genes = set(all_genes_df[all_genes_df.region=='J'].id)
+        unknown_j_genes_mask = ~df[j_column].isin(known_j_genes)
+        print('unknown_j_genes in df:', unknown_j_genes_mask.sum(),
+              df[unknown_j_genes_mask][j_column].unique())
+        unknown_genes_mask |= unknown_j_genes_mask
 
-    return df[good_cdr3s & (~bad_genes_mask) & (~unknown_genes_mask)].copy()
+
+    return df[good_cdr3s_mask & (~bad_v_genes_mask) & (~unknown_genes_mask)].copy()
 
 
 def parse_repertoire(
@@ -287,6 +305,7 @@ def parse_repertoire(
         v_column,
         j_column,
         cdr3_column,
+        extend_align=0,
 ):
     ''' Returns new dataframe with info on where the V/J regions of the
     cdr3 amino acid sequence end/begin
@@ -298,7 +317,7 @@ def parse_repertoire(
     ndn_part is everything else (the middle; might be the empty string)
 
     '''
-    all_genes_df = pd.read_table('./data/phil/combo_xcr.tsv')
+    all_genes_df = pd.read_table(DATADIR+'phil/combo_xcr.tsv')
     all_genes_df = all_genes_df[(all_genes_df.organism==organism)&
                                 (all_genes_df.chain==chain)]
 
@@ -329,6 +348,9 @@ def parse_repertoire(
             else:
                 j_idents += 1
 
+        v_idents += extend_align
+        j_idents += extend_align
+
         overlap = v_idents+j_idents - len(cdr3)
         if overlap>0:
             v_idents -= overlap//2
@@ -357,12 +379,22 @@ def parse_repertoire(
     return parsed_df
 
 
-def resample_parsed_repertoire(parsed_df, num, verbose=False):
+def resample_parsed_repertoire(
+        parsed_df,
+        num=None,
+        match_j_families=False, # require ndn_part and j_part to have same j fam
+        verbose=False,
+):
     ''' Build a new random repertoire by mixing and matching cdr3 pieces
     from a parsed repertoire.
 
     match the CDR3 length distributions
     '''
+    if num is None:
+        num = parsed_df.shape[0]
+    # TODO: right now this only works if resampling the same number of tcrs,
+    #   because of cdr3-length-distribution-matching
+    assert num == parsed_df.shape[0]
 
     old_counts = Counter(parsed_df.cdr3.str.len())
     new_counts = Counter() # the new cdr3 len counts
@@ -384,6 +416,15 @@ def resample_parsed_repertoire(parsed_df, num, verbose=False):
                 print(counter, len(dfl), skipcount)
             v = vrow.v
             j = jrow.j
+            if match_j_families and j[2] == 'B':
+                assert j.startswith('TRBJ') and j[5] == '-'
+                j_jfam = int(jrow.j[4])
+                d_jfam = int(drow.j[4])
+                assert j_jfam in [1,2] and d_jfam in [1,2]
+                if j_jfam != d_jfam:
+                    skipcount += 1
+                    continue
+
             cdr3 = vrow.v_part + drow.ndn_part + jrow.j_part
             l = len(cdr3)
             if new_counts[l] < old_counts[l]:
@@ -396,10 +437,146 @@ def resample_parsed_repertoire(parsed_df, num, verbose=False):
                 skipcount += 1
 
     assert len(dfl) == num
+    if verbose:
+        print('final skipcount:', skipcount)
     return pd.DataFrame(dfl)
 
 
-if MAIN: # explore a super-simple background repertoire
+if 0: # setup for big calc
+    PY = '/home/pbradley/miniconda3/envs/raptcr/bin/python'
+    EXE = '/home/pbradley/gitrepos/immune_response_detection/phil_hacking.py'
+
+    radii = [3.5, 6.5, 12.5, 18.5, 24.5]
+    num_repeats = 10
+    max_tcrs = 100000
+
+    fnames = glob('/home/pbradley/gitrepos/immune_response_detection/'
+                  'data/phil/britanova/A*gz')
+    print(len(fnames))
+
+    runtag = 'run2' ; xargs = ' --aa_mds_dim 16 '
+    #runtag = 'run1'
+
+    rundir = f'/home/pbradley/csdat/raptcr/slurm/{runtag}/'
+    if not exists(rundir):
+        mkdir(rundir)
+
+    cmds_file = f'{rundir}{runtag}_commands.txt'
+    assert not exists(cmds_file)
+    out = open(cmds_file,'w')
+
+    for fname in fnames:
+        ftag = fname.split('/')[-1][:-3]
+        for radius in radii:
+            for repeat in range(num_repeats):
+                outfile_prefix = f'{rundir}{runtag}_{ftag}_{radius:.1f}_r{repeat}'
+                cmd = (f'{PY} {EXE} {xargs} --filename {fname} --radius {radius} '
+                       f' --max_tcrs {max_tcrs} --outfile_prefix {outfile_prefix} '
+                       f' > {outfile_prefix}.log 2> {outfile_prefix}.err')
+                out.write(cmd+'\n')
+    out.close()
+    print('made:', cmds_file)
+
+    exit()
+
+
+
+if MAIN: # try some range searching against various simple background repertoires
+    import faiss
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--radius', type=float, required=True)
+    parser.add_argument('--filename', required=True)
+    parser.add_argument('--outfile_prefix', required=True)
+    parser.add_argument('--max_tcrs', type=int)
+    parser.add_argument('--aa_mds_dim', type=int, default=8)
+    args = parser.parse_args()
+
+
+    # load data from the Britanova aging study; I downloaded the files from:
+    # https://zenodo.org/record/826447#.Y-7Ku-zMIWo
+    #
+    print('reading:', args.filename)
+
+    tcrs = pd.read_table(args.filename)
+    if args.max_tcrs is not None:
+        tcrs = tcrs.head(args.max_tcrs)
+
+    tcrs['v'] = tcrs.v+'*01'
+    tcrs['j'] = tcrs.j+'*01'
+
+    # remove singletons
+    tcrs = tcrs[tcrs['count']>1]
+
+    # filter bad genes/cdr3s
+    v_column, j_column, cdr3_column, organism, chain = 'v','j','cdr3aa','human','B'
+    tcrs = filter_out_bad_genes_and_cdr3s(
+        tcrs, v_column, cdr3_column, organism, chain, j_column=j_column)
+    print('num_tcrs:', tcrs.shape[0], args.filename)
+
+    # encode the tcrs
+    vecs = gapped_encode_tcr_chains(
+        tcrs, organism, chain, args.aa_mds_dim, v_column=v_column,
+        cdr3_column=cdr3_column).astype(np.float32)
+
+
+    # parse repertoire, create background reps
+    parsed_df = parse_repertoire(
+        tcrs, organism, chain, v_column, j_column, cdr3_column)
+    parsed_df_x1 = parse_repertoire(
+        tcrs, organism, chain, v_column, j_column, cdr3_column, extend_align=1)
+
+
+    # fg radius search:
+    idx = faiss.IndexFlatL2(vecs.shape[1])
+    idx.add(vecs)
+    start = timer()
+    lims,D,I = idx.range_search(vecs, args.radius)
+    print(f'fg range_search took {timer()-start:.2f} secs', len(vecs))
+    nbr_counts = lims[1:]-lims[:-1] - 1 # exclude self
+
+    outfile = f'{args.outfile_prefix}_fg_nbr_counts.npy'
+    np.save(outfile, nbr_counts)
+    print('made:', outfile, flush=True)
+
+
+    for bgnum in range(4):
+        if bgnum==0:
+            bg_tcrs = resample_parsed_repertoire(parsed_df)
+        elif bgnum==1:
+            bg_tcrs = resample_parsed_repertoire(parsed_df_x1)
+        elif bgnum==2:
+            bg_tcrs = resample_parsed_repertoire(
+                parsed_df, match_j_families=True)
+        elif bgnum==3:
+            bg_tcrs = resample_parsed_repertoire(
+                parsed_df_x1, match_j_families=True)
+
+        bg_tcrs.rename(columns={'v':v_column, 'cdr3':cdr3_column},
+                       inplace=True)
+
+        bg_vecs = gapped_encode_tcr_chains(
+            bg_tcrs, organism, chain, args.aa_mds_dim, v_column=v_column,
+            cdr3_column=cdr3_column).astype(np.float32)
+
+        idx = faiss.IndexFlatL2(bg_vecs.shape[1])
+        idx.add(bg_vecs)
+        start = timer()
+        lims,D,I = idx.range_search(vecs, args.radius)
+        print(f'bg range_search took {timer()-start:.2f} secs', len(vecs))
+        bg_nbr_counts = lims[1:]-lims[:-1]
+
+        outfile = f'{args.outfile_prefix}_bg_{bgnum}_nbr_counts.npy'
+        np.save(outfile, bg_nbr_counts)
+        print('made:', outfile)
+
+
+    exit()
+
+
+
+if 0: # explore a super-simple background repertoire
     from pynndescent import NNDescent
 
     aa_mds_dim = 8 # per-aa MDS embedding dimension
@@ -408,7 +585,8 @@ if MAIN: # explore a super-simple background repertoire
     j_column = 'j_call'
     df = pd.read_table('./data/example_repertoire.tsv')#.head(10000)
 
-    df = filter_out_bad_genes_and_cdr3s(df, v_column, cdr3_column, organism, chain)
+    df = filter_out_bad_genes_and_cdr3s(
+        df, v_column, cdr3_column, organism, chain, j_column=j_column)
 
     parsed_df = parse_repertoire(df, organism, chain, v_column, j_column, cdr3_column)
 
