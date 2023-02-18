@@ -444,63 +444,82 @@ def analyze_junction(
         )
 
 
-def parse_tcr_junctions( organism, tcrs ):
+def parse_tcr_junctions( organism, tcrs):
     '''
     Analyze the junction regions of all the tcrs. Return a pandas dataframe with the results, in the same order
     as tcrs
+
+    tcrs = [(atcr1, btcr1),...] and either atcr or btcr can be None
     '''
 
     dfl = []
 
     for ii, (atcr, btcr) in enumerate(tcrs):
-        if ii%1000==0:
+        if ii%10000==0:
             print('parse_tcr_junctions:', ii, len(tcrs))
-        va, ja, cdr3a, cdr3a_nucseq = atcr
-        vb, jb, cdr3b, cdr3b_nucseq = btcr
 
-        aresults = analyze_junction(organism, va, ja, cdr3a, cdr3a_nucseq,
-                                    return_cdr3_nucseq_src=True)
-        bresults = analyze_junction(organism, vb, jb, cdr3b, cdr3b_nucseq,
-                                    return_cdr3_nucseq_src=True)
+        results = OrderedDict()
 
-        # trims = ( v_trim, d0_trim, d1_trim, j_trim )
-        # inserts = ( best_d_id, n_vd_insert, n_dj_insert, n_vj_insert )
+        if atcr is not None:
+            va, ja, cdr3a, cdr3a_nucseq = atcr
 
-        _, cdr3a_protseq_masked, _, a_trims, a_inserts, cdr3a_nucseq_src = aresults
-        _, cdr3b_protseq_masked, _, b_trims, b_inserts, cdr3b_nucseq_src = bresults
+            aresults = analyze_junction(organism, va, ja, cdr3a, cdr3a_nucseq,
+                                        return_cdr3_nucseq_src=True)
 
-        assert a_trims[1]+a_trims[2] == 0
-        assert a_inserts[1]+a_inserts[2] == 0
+            # trims = ( v_trim, d0_trim, d1_trim, j_trim )
+            # inserts = ( best_d_id, n_vd_insert, n_dj_insert, n_vj_insert )
 
-        a_indels = f'+{sum(a_inserts)}-{sum(a_trims)}'
-        b_indels = f'+{sum(b_inserts)}-{sum(b_trims)}'
+            _, cdr3a_protseq_masked, _, a_trims, a_inserts, cdr3a_nucseq_src = aresults
 
-        dfl.append( OrderedDict( clone_index=ii,
-                                 va=va,
-                                 ja=ja,
-                                 cdr3a=cdr3a,
-                                 cdr3a_nucseq=cdr3a_nucseq,
-                                 cdr3a_protseq_masked=cdr3a_protseq_masked,
-                                 cdr3a_nucseq_src=''.join(cdr3a_nucseq_src),
-                                 va_trim=a_trims[0],
-                                 ja_trim=a_trims[3],
-                                 a_insert=a_inserts[3],
-                                 vb=vb,
-                                 jb=jb,
-                                 cdr3b=cdr3b,
-                                 cdr3b_nucseq=cdr3b_nucseq,
-                                 cdr3b_protseq_masked=cdr3b_protseq_masked,
-                                 cdr3b_nucseq_src=''.join(cdr3b_nucseq_src),
-                                 vb_trim=b_trims[0],
-                                 d0_trim=b_trims[1],
-                                 d1_trim=b_trims[2],
-                                 jb_trim=b_trims[3],
-                                 vd_insert=b_inserts[1],
-                                 dj_insert=b_inserts[2],
-                                 vj_insert=b_inserts[3],
-                                 a_indels=a_indels,
-                                 b_indels=b_indels,
-                                 ))
+            assert a_trims[1]+a_trims[2] == 0
+            assert a_inserts[1]+a_inserts[2] == 0
+
+            a_indels = f'+{sum(a_inserts)}-{sum(a_trims)}'
+            results.update(OrderedDict(
+                clone_index=ii,
+                va=va,
+                ja=ja,
+                cdr3a=cdr3a,
+                cdr3a_nucseq=cdr3a_nucseq,
+                cdr3a_protseq_masked=cdr3a_protseq_masked,
+                cdr3a_nucseq_src=''.join(cdr3a_nucseq_src),
+                va_trim=a_trims[0],
+                ja_trim=a_trims[3],
+                a_insert=a_inserts[3],
+                a_indels=a_indels,
+            ))
+
+        if btcr is not None:
+            vb, jb, cdr3b, cdr3b_nucseq = btcr
+
+            bresults = analyze_junction(organism, vb, jb, cdr3b, cdr3b_nucseq,
+                                        return_cdr3_nucseq_src=True)
+
+            # trims = ( v_trim, d0_trim, d1_trim, j_trim )
+            # inserts = ( best_d_id, n_vd_insert, n_dj_insert, n_vj_insert )
+
+            _, cdr3b_protseq_masked, _, b_trims, b_inserts, cdr3b_nucseq_src = bresults
+
+            b_indels = f'+{sum(b_inserts)}-{sum(b_trims)}'
+
+            results.update(OrderedDict(
+                clone_index=ii,
+                vb=vb,
+                jb=jb,
+                cdr3b=cdr3b,
+                cdr3b_nucseq=cdr3b_nucseq,
+                cdr3b_protseq_masked=cdr3b_protseq_masked,
+                cdr3b_nucseq_src=''.join(cdr3b_nucseq_src),
+                vb_trim=b_trims[0],
+                d0_trim=b_trims[1],
+                d1_trim=b_trims[2],
+                jb_trim=b_trims[3],
+                vd_insert=b_inserts[1],
+                dj_insert=b_inserts[2],
+                vj_insert=b_inserts[3],
+                b_indels=b_indels,
+            ))
+        dfl.append(results)
 
     return pd.DataFrame(dfl)
 

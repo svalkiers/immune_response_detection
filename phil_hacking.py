@@ -443,19 +443,23 @@ def resample_parsed_repertoire(
 
 
 if 0: # setup for big calc
+    # this block generates a file containing commands
+    # those commands get distributed over the cluster
+    #
     PY = '/home/pbradley/miniconda3/envs/raptcr/bin/python'
     EXE = '/home/pbradley/gitrepos/immune_response_detection/phil_hacking.py'
 
     radii = [3.5, 6.5, 12.5, 18.5, 24.5]
     num_repeats = 10
-    max_tcrs = 100000
 
     fnames = glob('/home/pbradley/gitrepos/immune_response_detection/'
                   'data/phil/britanova/A*gz')
     print(len(fnames))
 
-    runtag = 'run2' ; xargs = ' --aa_mds_dim 16 '
-    #runtag = 'run1'
+    runtag = 'run4' ; xargs = ' --max_tcrs 500000 ' # new 5th bg rep
+    #runtag = 'run3' ; xargs = ' --max_tcrs 500000 '
+    #runtag = 'run2' ; xargs = ' --aa_mds_dim 16 --max_tcrs 100000 '
+    #runtag = 'run1' ; xargs = ' --max_tcrs 100000 '
 
     rundir = f'/home/pbradley/csdat/raptcr/slurm/{runtag}/'
     if not exists(rundir):
@@ -471,7 +475,7 @@ if 0: # setup for big calc
             for repeat in range(num_repeats):
                 outfile_prefix = f'{rundir}{runtag}_{ftag}_{radius:.1f}_r{repeat}'
                 cmd = (f'{PY} {EXE} {xargs} --filename {fname} --radius {radius} '
-                       f' --max_tcrs {max_tcrs} --outfile_prefix {outfile_prefix} '
+                       f' --outfile_prefix {outfile_prefix} '
                        f' > {outfile_prefix}.log 2> {outfile_prefix}.err')
                 out.write(cmd+'\n')
     out.close()
@@ -482,8 +486,10 @@ if 0: # setup for big calc
 
 
 if MAIN: # try some range searching against various simple background repertoires
+    # this block gets called by the commands in the listfile generated above
     import faiss
     import argparse
+    import tcrdist
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--radius', type=float, required=True)
@@ -527,6 +533,10 @@ if MAIN: # try some range searching against various simple background repertoire
     parsed_df_x1 = parse_repertoire(
         tcrs, organism, chain, v_column, j_column, cdr3_column, extend_align=1)
 
+    tcrs['cdr3nt'] = tcrs.cdr3nt.str.lower()
+    tcr_tuples = [(None,x) for x in tcrs['v j cdr3aa cdr3nt'.split()].itertuples(
+        name=None, index=None)]
+    junctions = tcrdist.tcr_sampler.parse_tcr_junctions(organism, tcr_tuples)
 
     # fg radius search:
     idx = faiss.IndexFlatL2(vecs.shape[1])
@@ -541,7 +551,7 @@ if MAIN: # try some range searching against various simple background repertoire
     print('made:', outfile, flush=True)
 
 
-    for bgnum in range(4):
+    for bgnum in reversed(range(5)):
         if bgnum==0:
             bg_tcrs = resample_parsed_repertoire(parsed_df)
         elif bgnum==1:
@@ -552,6 +562,10 @@ if MAIN: # try some range searching against various simple background repertoire
         elif bgnum==3:
             bg_tcrs = resample_parsed_repertoire(
                 parsed_df_x1, match_j_families=True)
+        elif bgnum==4:
+            bg_tcr_tuples = tcrdist.tcr_sampler.resample_shuffled_tcr_chains(
+                organism, tcrs.shape[0], chain, junctions)
+            bg_tcrs = pd.DataFrame([dict(v=x[0], cdr3=x[2]) for x in bg_tcr_tuples])
 
         bg_tcrs.rename(columns={'v':v_column, 'cdr3':cdr3_column},
                        inplace=True)
