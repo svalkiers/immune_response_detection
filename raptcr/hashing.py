@@ -5,8 +5,9 @@ from sklearn.manifold import MDS
 from typing import Union
 
 from .analysis import TcrCollection, Repertoire, Cluster, ClusteredRepertoire
-from .constants.base import AALPHABET
-from .constants.hashing import DEFAULT_DM
+from .tools import timed
+from .constants.base import AALPHABET, GAPCHAR
+from .constants.hashing import DEFAULT_DM, TCRDIST_DM
 
 from sklearn.utils.validation import check_is_fitted
 
@@ -166,3 +167,137 @@ class Cdr3Hasher(BaseEstimator, TransformerMixin):
             return np.vstack([self.transform(s) for s in X]).astype(np.float32)
         else:
             return self._hash_cdr3(X)
+
+
+class TCRDistEncoder(BaseEstimator, TransformerMixin):
+
+    def __init__(
+        self,
+        distance_matrix:np.array=TCRDIST_DM, 
+        aa_dim:int=8,
+        num_pos:int=16,
+        n_trim:int=3,
+        c_trim:int=2
+        ):
+        
+        self.distance_matrix = distance_matrix
+        self.aa_dim = aa_dim
+        self.num_pos = num_pos
+        self.n_trim = n_trim
+        self.c_trim = c_trim
+
+    def __repr__(self):
+        return f'TCRDistEncoder(aa_dim={self.aa_dim})'
+
+    def _calc_mds_vecs(self, return_stress=False):
+        '''
+        Helper function to run MDS.
+        '''
+        mds = MDS(
+            n_components=self.aa_dim,
+            dissimilarity="precomputed",
+            random_state=11,
+            normalized_stress=False
+            )
+        vecs = mds.fit_transform(self.dm)
+        if return_stress:
+            return vecs, mds.stress_
+        else:
+            return vecs
+    
+    def _calc_tcrdist_aa_vectors(self, SQRT=True, verbose=False):
+        '''
+        Embed tcrdist distance matrix to Euclidean space.
+        '''
+        self.dm = np.zeros((21,21))
+        self.dm[:20,:20] = self.distance_matrix
+        self.dm[:20,20] = 4.
+        self.dm[20,:20] = 4.
+        if SQRT:
+            self.dm = np.sqrt(self.dm) ## NOTE
+        vecs, stress = self._calc_mds_vecs(return_stress=True)
+        # print('vecs mean:', np.mean(vecs, axis=0)) #looks like they are already zeroed
+        # vecs -= np.mean(vecs, axis=0) # I think this is unnecessary, but for sanity...
+        if verbose:
+            print(f'encoding tcrdist aa+gap matrix, dim= {self.aa_dim} stress= {stress}')
+        return {aa:v for aa,v in zip(AALPHABET+GAPCHAR, vecs)}
+
+    def _trim_and_gap_cdr3(self, cdr3):
+        ''' 
+        Convert a variable length cdr3 to a fixed-length sequence in a way
+        that is consistent with tcrdist scoring, by trimming the ends and
+        inserting gaps at a fixed position
+
+        If the cdr3 is longer than num_pos + n_trim + c_trim, some residues will be dropped
+        '''
+        gappos = min(6, 3+(len(cdr3)-5)//2) - self.n_trim
+        r = -self.c_trim if self.c_trim>0 else len(cdr3)
+        seq = cdr3[self.n_trim:r]
+        afterlen = min(self.num_pos-gappos, len(seq)-gappos)
+        numgaps = max(0, self.num_pos-len(seq))
+        fullseq = seq[:gappos] + GAPCHAR*numgaps + seq[-afterlen:]
+        assert len(fullseq) == self.num_pos
+        return fullseq
+
+    def _encode_sequence(self, seq):
+        '''
+        Convert a sequence to a vector by lining up the aa_vectors
+
+        length of the vector will be dim * len(seq), where dim is the dimension of the
+        embedding given by aa_vectors
+        '''
+        # self.calc_tcrdist_aa_vectors()
+        dim = self.aa_vectors_['A'].shape[0]
+        vec = np.zeros((len(seq)*dim,))
+        for i,aa in enumerate(seq):
+            vec[i*dim:(i+1)*dim] = self.aa_vectors_[aa]
+        return vec
+
+    @lru_cache(maxsize=None)
+    def _gapped_encode_cdr3(self, cdr3):
+        '''
+        Convert a cdr3 of variable length to a fixed-length vector
+        by trimming/gapping and then lining up the aa_vectors
+
+        length of the vector will be dim * num_pos, where dim is the dimension of the
+        embedding given by aa_vectors
+        '''
+        return self._encode_sequence(self._trim_and_gap_cdr3(cdr3))
+
+    # def _gapped_encode_cdr3s(cdr3s):
+    #     ''' Convert a list/Repertoire of cdr3s to fixed-length vectors
+    #     Uses the gapped_encode_cdr3 function above, and an aa embedding from MDS
+    #     of the tcrdist distance matrix.
+    #     '''
+    #     # aa_vectors = calc_tcrdist_aa_vectors(dim, SQRT=SQRT, verbose=True)
+    #     return np.array([gapped_encode_cdr3(cdr3) for cdr3 in cdr3s])
+
+    def fit(self, X=None, y=None):
+        self.aa_vectors_ = self._calc_tcrdist_aa_vectors()
+        # self._gapped_encode_cdr3s(X)
+        return self
+
+    def transform(self, X: Union[TcrCollection, list, str], y=None) -> np.array:
+        """
+        Generate CDR3 hashes.
+
+        Parameters
+        ----------
+        x : Union[TcrCollection, list, str]
+            Objects to hash, this can be a single CDR3 sequence, but also a
+            TcrCollection subclass or list thereof.
+
+        Returns
+        -------
+        np.array[n,m]
+            Array containing m-dimensional hashes for each of the n provided inputs.
+        """
+        check_is_fitted(self)
+        if isinstance(X, (list, np.ndarray)):
+            return np.array([self.transform(s) for s in X]).astype(np.float32)
+        # elif isinstance(X, Cluster):
+        #     return self._hash_collection(X)
+        # elif isinstance(X, ClusteredRepertoire):
+        #     return np.vstack([self.transform(s) for s in X]).astype(np.float32)
+        else:
+            return self._gapped_encode_cdr3(X)
