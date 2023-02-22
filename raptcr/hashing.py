@@ -310,8 +310,14 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         tcrs : pd.DataFrame
             DataFrame with V and CDR3 information in the named columns.
         '''
-        # aa_vectors = calc_tcrdist_aa_vectors(aa_mds_dim, SQRT=True, verbose=True)
-
+        
+        # !THE FOLLOWING V GENES CONTAIN '*' CHARACTER WHICH IS CAUSING ISSUES WITH THE ENCODING!
+        # TRBV12-2*01 -----> FGH-NFFRS-*SIPDGSF
+        # TRBV16*02 -------> KGH-S*FQN-ENVLPNSP
+        to_remove = ['TRBV12-2*01','TRBV16*02']
+        if tcrs[tcrs.v_call.isin(to_remove)].shape[0] > 0:
+            print(f"WARNING: Removing TCRs with {to_remove}. This is a temporary measure to prevent KeyError caused by '*' character.\n")
+            tcrs = tcrs[~tcrs.v_call.isin(to_remove)]
 
         gene_cdr_strings = setup_gene_cdr_strings(self.organism, self.chain)
         num_pos_other_cdrs = len(next(iter(gene_cdr_strings.values())))
