@@ -182,7 +182,8 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         c_trim:int=2,
         cdr3_weight:int=3,
         organism:str='human',
-        chain:str='B'
+        chain:str='B',
+        full_tcr:bool=False
         ):
         """
         TCRDist-based vector embedding for amino acid sequences. Trims and
@@ -211,6 +212,11 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
             Organism from which the input sequences originate from.
         chain : str
             TCR chain from which the input sequences originate from.
+        full_tcr : bool
+            Boolean indicating whether the full TCR (CDR1+CDR2+CDR2.5+CDR3)
+            should be used for creating the embedding. This parameter is
+            primarily used to calculate the dimensionality of the final vector,
+            which is necessary for indexing (see indexing.py classes).
         """
         self.distance_matrix = distance_matrix
         self.aa_dim = aa_dim
@@ -220,6 +226,12 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         self.cdr3_weight = cdr3_weight
         self.organism = organism
         self.chain = chain
+        
+        self.full_tcr = full_tcr
+        if self.full_tcr:
+            self.m = self.aa_dim*self.num_pos + self.aa_dim*18
+        else:
+            self.m = self.aa_dim*self.num_pos 
 
     def __repr__(self):
         return f'TCRDistEncoder(aa_dim={self.aa_dim})'
@@ -363,8 +375,13 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         if isinstance(X, (list, np.ndarray)):
             return np.array([self.transform(s) for s in X]).astype(np.float32)
         elif isinstance(X, pd.DataFrame):
-            assert 'v_call' in X.columns, f"DataFrame does not include column named 'v_gene'."
-            assert 'junction_aa' in X.columns, f"DataFrame does not include column named 'junction_aa'."
-            return self._gapped_encode_tcr_chains(X)
+            if self.full_tcr:
+                assert 'v_call' in X.columns, f"DataFrame does not include column named 'v_gene'."
+                assert 'junction_aa' in X.columns, f"DataFrame does not include column named 'junction_aa'."
+                return self._gapped_encode_tcr_chains(X)
+            else:
+                assert 'junction_aa' in X.columns, f"DataFrame does not include column named 'junction_aa'."
+                X = X.junction_aa.to_list()
+                return np.array([self.transform(s) for s in X]).astype(np.float32)
         else:
             return self._gapped_encode_cdr3(X)
