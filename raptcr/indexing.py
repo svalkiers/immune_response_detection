@@ -30,8 +30,14 @@ class BaseIndex(ABC):
         self.idx.add(hashes)
 
     def _add_ids(self, X):
-        for i, x in enumerate(X):
-            self.ids[i] = x
+        if isinstance(self.hasher, TCRDistEncoder):
+            if isinstance(X, pd.DataFrame):
+                if self.hasher.full_tcr:
+                    for i, x in enumerate(X.iterrows()):
+                        self.ids[i] = x[1]['v_call'] + "_" + x[1]['junction_aa']
+        else:
+            for i, x in enumerate(X):
+                self.ids[i] = x
 
     def add(self, X: TcrCollection):
         """
@@ -81,7 +87,10 @@ class BaseIndex(ABC):
         return KnnResult(y, D, I, self.ids)
 
     def _within_radius(self, x, r):
-        xq = np.expand_dims(x, axis=0)
+        if len(x.shape) <= 0:
+            xq = np.expand_dims(x, axis=0)
+        else:
+            xq = x
         return self.idx.range_search(x=xq, thresh=r)
 
     def _report_radius(self, I, D, exclude_self:bool=True):
