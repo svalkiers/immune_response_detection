@@ -1,13 +1,15 @@
-from functools import lru_cache
 import numpy as np
+import pandas as pd
+
+from typing import Union
+from functools import lru_cache
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.manifold import MDS
-from typing import Union
 
 from .analysis import TcrCollection, Repertoire, Cluster, ClusteredRepertoire
-from .tools import timed
 from .constants.base import AALPHABET, GAPCHAR
 from .constants.hashing import DEFAULT_DM, TCRDIST_DM
+from .constants.preprocessing import setup_gene_cdr_strings
 
 from sklearn.utils.validation import check_is_fitted
 
@@ -35,7 +37,7 @@ class Cdr3Hasher(BaseEstimator, TransformerMixin):
         """
         Locality-sensitive hashing for amino acid sequences. Hashes CDR3
         sequences of varying lengths into m-dimensional vectors, preserving
-        similarity.
+        similarity.setup_gene_cdr_strings
 
         Parameters
         ----------
@@ -177,14 +179,47 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         aa_dim:int=8,
         num_pos:int=16,
         n_trim:int=3,
-        c_trim:int=2
+        c_trim:int=2,
+        cdr3_weight:int=3,
+        organism:str='human',
+        chain:str='B'
         ):
-        
+        """
+        TCRDist-based vector embedding for amino acid sequences. Trims and
+        gaps sequences to a fixed length and transforms the TCRDist-matrix
+        into euclidean space, generating a unique embedding for distinct TCRs
+        whose distances reflect the TCRDist-distances between the original sequences.
+
+        Parameters
+        ----------
+        distance_matrix : np.ndarray[20,20]
+            Twenty by twenty matrix containing AA distances. By default, the
+            TCRDist matrix is used here.
+        aa_dim : int
+            Number of dimensions for each amino acid. The final vector will have a
+            total length of aa_dim * num_pos dimensions.
+        num_pos : int
+            Fixed length to which a sequence is gapped after trimming.
+        n_trim : int
+            Number of amino acids trimmed from left side of sequence.
+        c_trim : int
+            Number of amino acids trimmed from right side of sequence.
+        cdr3_weight : int
+            Weighting factor for the CDR3 region relative to other CDRs.
+            (Only when including the V gene)
+        organism : str
+            Organism from which the input sequences originate from.
+        chain : str
+            TCR chain from which the input sequences originate from.
+        """
         self.distance_matrix = distance_matrix
         self.aa_dim = aa_dim
         self.num_pos = num_pos
         self.n_trim = n_trim
         self.c_trim = c_trim
+        self.cdr3_weight = cdr3_weight
+        self.organism = organism
+        self.chain = chain
 
     def __repr__(self):
         return f'TCRDistEncoder(aa_dim={self.aa_dim})'
@@ -239,6 +274,7 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         assert len(fullseq) == self.num_pos
         return fullseq
 
+    @lru_cache(maxsize=None)
     def _encode_sequence(self, seq):
         '''
         Convert a sequence to a vector by lining up the aa_vectors
@@ -264,20 +300,45 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         '''
         return self._encode_sequence(self._trim_and_gap_cdr3(cdr3))
 
-    # def _gapped_encode_cdr3s(cdr3s):
-    #     ''' Convert a list/Repertoire of cdr3s to fixed-length vectors
-    #     Uses the gapped_encode_cdr3 function above, and an aa embedding from MDS
-    #     of the tcrdist distance matrix.
-    #     '''
-    #     # aa_vectors = calc_tcrdist_aa_vectors(dim, SQRT=SQRT, verbose=True)
-    #     return np.array([gapped_encode_cdr3(cdr3) for cdr3 in cdr3s])
+    def _gapped_encode_tcr_chains(self, tcrs:pd.DataFrame) -> np.array:
+        '''
+        Convert a TCR (V gene + CDR3) of variable length to a fixed-length vector
+        by trimming/gapping and then lining up the aa_vectors.
+
+        Parameters
+        ----------
+        tcrs : pd.DataFrame
+            DataFrame with V and CDR3 information in the named columns.
+        '''
+        # aa_vectors = calc_tcrdist_aa_vectors(aa_mds_dim, SQRT=True, verbose=True)
+
+
+        gene_cdr_strings = setup_gene_cdr_strings(self.organism, self.chain)
+        num_pos_other_cdrs = len(next(iter(gene_cdr_strings.values())))
+        assert all(len(x)==num_pos_other_cdrs for x in gene_cdr_strings.values())
+
+        vec_len = self.aa_dim * (num_pos_other_cdrs + self.num_pos)
+        print(
+            f'gapped_encode_tcr_chains: aa_mds_dim={self.aa_dim}\n',
+            f'num_pos_other_cdrs={num_pos_other_cdrs}',
+            f'num_pos_cdr3={self.num_pos}', 
+            f'vec_len={vec_len}'
+            )
+
+        vecs = []
+        for v, cdr3 in zip(tcrs['v_call'], tcrs['junction_aa']):
+            v_vec = self._encode_sequence(gene_cdr_strings[v])
+            cdr3_vec = np.sqrt(self.cdr3_weight) * self._gapped_encode_cdr3(cdr3)
+            vecs.append(np.concatenate([v_vec, cdr3_vec]))
+        vecs = np.array(vecs)
+        assert vecs.shape == (tcrs.shape[0], vec_len)
+        return vecs
 
     def fit(self, X=None, y=None):
         self.aa_vectors_ = self._calc_tcrdist_aa_vectors()
-        # self._gapped_encode_cdr3s(X)
         return self
 
-    def transform(self, X: Union[TcrCollection, list, str], y=None) -> np.array:
+    def transform(self, X: Union[TcrCollection, pd.DataFrame, list, str], y=None) -> np.array:
         """
         Generate CDR3 hashes.
 
@@ -295,9 +356,9 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         check_is_fitted(self)
         if isinstance(X, (list, np.ndarray)):
             return np.array([self.transform(s) for s in X]).astype(np.float32)
-        # elif isinstance(X, Cluster):
-        #     return self._hash_collection(X)
-        # elif isinstance(X, ClusteredRepertoire):
-        #     return np.vstack([self.transform(s) for s in X]).astype(np.float32)
+        elif isinstance(X, pd.DataFrame):
+            assert 'v_call' in X.columns, f"DataFrame does not include column named 'v_gene'."
+            assert 'junction_aa' in X.columns, f"DataFrame does not include column named 'junction_aa'."
+            return self._gapped_encode_tcr_chains(X)
         else:
             return self._gapped_encode_cdr3(X)
