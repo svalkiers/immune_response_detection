@@ -33,7 +33,7 @@ class BaseIndex(ABC):
         if isinstance(self.hasher, TCRDistEncoder):
             if isinstance(X, pd.DataFrame):
                 if self.hasher.full_tcr:
-                    for i, x in enumerate(X.iterrows()):
+                    for i, x in enumerate(self.hasher.tcrs.iterrows()):
                         self.ids[i] = x[1]['v_call'] + "_" + x[1]['junction_aa']
         else:
             for i, x in enumerate(X):
@@ -117,7 +117,7 @@ class BaseIndex(ABC):
         """
         q = self.hasher.transform(query).astype(np.float32)
         lims, D, I = self._within_radius(x=q, r=r)
-        return self._report_radius(I, D)
+        return self._report_radius(I, D, exclude_self=exclude_self)
 
 class FlatIndex(BaseIndex):
     """

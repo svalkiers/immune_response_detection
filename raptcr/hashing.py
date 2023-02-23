@@ -322,14 +322,14 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         tcrs : pd.DataFrame
             DataFrame with V and CDR3 information in the named columns.
         '''
-        
+        self.tcrs = tcrs
         # !THE FOLLOWING V GENES CONTAIN '*' CHARACTER WHICH IS CAUSING ISSUES WITH THE ENCODING!
         # TRBV12-2*01 -----> FGH-NFFRS-*SIPDGSF
         # TRBV16*02 -------> KGH-S*FQN-ENVLPNSP
         to_remove = ['TRBV12-2*01','TRBV16*02']
-        if tcrs[tcrs.v_call.isin(to_remove)].shape[0] > 0:
+        if self.tcrs[self.tcrs.v_call.isin(to_remove)].shape[0] > 0:
             print(f"WARNING: Removing TCRs with {to_remove}. This is a temporary measure to prevent KeyError caused by '*' character.\n")
-            tcrs = tcrs[~tcrs.v_call.isin(to_remove)]
+            self.tcrs = self.tcrs[~self.tcrs.v_call.isin(to_remove)]
 
         gene_cdr_strings = setup_gene_cdr_strings(self.organism, self.chain)
         num_pos_other_cdrs = len(next(iter(gene_cdr_strings.values())))
@@ -344,12 +344,12 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
             )
 
         vecs = []
-        for v, cdr3 in zip(tcrs['v_call'], tcrs['junction_aa']):
+        for v, cdr3 in zip(self.tcrs['v_call'], self.tcrs['junction_aa']):
             v_vec = self._encode_sequence(gene_cdr_strings[v])
             cdr3_vec = np.sqrt(self.cdr3_weight) * self._gapped_encode_cdr3(cdr3)
             vecs.append(np.concatenate([v_vec, cdr3_vec]))
         vecs = np.array(vecs)
-        assert vecs.shape == (tcrs.shape[0], vec_len)
+        assert vecs.shape == (self.tcrs.shape[0], vec_len)
         return vecs
 
     def fit(self, X=None, y=None):
