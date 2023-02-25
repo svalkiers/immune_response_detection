@@ -1,14 +1,16 @@
 from abc import ABC
 from functools import partial
-from typing import List, Tuple, Callable
+from typing import List, Tuple, Callable, Union
 
 import faiss
 from pynndescent import NNDescent
 import numpy as np
 import pandas as pd
 
-from .hashing import Cdr3Hasher
+from .hashing import Cdr3Hasher, TCRDistEncoder
 from .analysis import TcrCollection
+
+from timeit import default_timer as timer
 
 
 class BaseIndex(ABC):
@@ -16,7 +18,7 @@ class BaseIndex(ABC):
     Abstract structure for an index, supports adding CDR3s and searching them.
     """
 
-    def __init__(self, idx: faiss.Index, hasher: Cdr3Hasher) -> None:
+    def __init__(self, idx: faiss.Index, hasher: Union[Cdr3Hasher, TCRDistEncoder]) -> None:
         super().__init__()
         self.idx = idx
         self.hasher = hasher
@@ -28,8 +30,14 @@ class BaseIndex(ABC):
         self.idx.add(hashes)
 
     def _add_ids(self, X):
-        for i, x in enumerate(X):
-            self.ids[i] = x
+        if isinstance(self.hasher, TCRDistEncoder):
+            if isinstance(X, pd.DataFrame):
+                if self.hasher.full_tcr:
+                    for i, x in enumerate(self.hasher.tcrs.iterrows()):
+                        self.ids[i] = x[1]['v_call'] + "_" + x[1]['junction_aa']
+        else:
+            for i, x in enumerate(X):
+                self.ids[i] = x
 
     def add(self, X: TcrCollection):
         """
@@ -41,6 +49,10 @@ class BaseIndex(ABC):
             Collection of TCRs to add. Can be a Repertoire, list of Clusters, or
             list of str.
         """
+        if isinstance(X, pd.DataFrame):
+            if not self.hasher.full_tcr:
+                import warnings
+                warnings.warn(f"Provided DataFrame but 'full_tcr' was set to {self.hasher.full_tcr} --> only using CDR3 sequences to create embedding.")
         hashes = self.hasher.transform(X).astype(np.float32)
         self._add_hashes(hashes)
         self._add_ids(X)
@@ -75,7 +87,10 @@ class BaseIndex(ABC):
         return KnnResult(y, D, I, self.ids)
 
     def _within_radius(self, x, r):
-        xq = np.expand_dims(x, axis=0)
+        if len(x.shape) <= 0:
+            xq = np.expand_dims(x, axis=0)
+        else:
+            xq = x
         return self.idx.range_search(x=xq, thresh=r)
 
     def _report_radius(self, I, D, exclude_self:bool=True):
@@ -102,7 +117,7 @@ class BaseIndex(ABC):
         """
         q = self.hasher.transform(query).astype(np.float32)
         lims, D, I = self._within_radius(x=q, r=r)
-        return self._report_radius(I, D)
+        return self._report_radius(I, D, exclude_self=exclude_self)
 
 class FlatIndex(BaseIndex):
     """

@@ -1,0 +1,16 @@
+name: immune_response_detection
+channels:
+  - anaconda
+  - pytorch
+  - defaults
+  - bioconda
+  - conda-forge
+dependencies:
+  - python=3.9
+  - faiss-cpu=1.7.3
+  - scipy=1.9.3
+  - scikit-learn=1.2.0
+  - numpy=1.23.5
+  - pandas=1.5.2
+  - pynndescent=0.5.8
+  - pip
