@@ -17,7 +17,7 @@ import random
 
 from phil_functions import *
 
-MAIN = __name__ == '__main__'
+#MAIN = __name__ == '__main__'
 
 ## testing new functions:
 
@@ -100,10 +100,11 @@ if 0: # testing new background model
     exit()
 
 
-if 1: # look at YFV nndists for expanding clones
+if 0: # look at YFV nndists for expanding clones
     import faiss
 
-    runtag = 'run11'
+    runtag = 'run12'
+    #runtag = 'run11'
     bgnum = 4
     aa_mds_dim = 8 # for finding nbrs of expanding clones
 
@@ -208,7 +209,7 @@ if 1: # look at YFV nndists for expanding clones
 
     exit()
 
-if 0: # look at nbr counts in YFV data
+if 1: # look at nbr counts in YFV data
     import tcrdist
     import networkx as nx
     from scipy.spatial.distance import squareform, pdist
@@ -220,7 +221,7 @@ if 0: # look at nbr counts in YFV data
     assert len(fg_files) == 7
 
 
-    #fg_files = fg_files[-1:]
+    fg_files = fg_files[3:4]
 
     #fg_files = fg_files[-2:]
     #fg_files = fg_files[:1]
@@ -251,7 +252,7 @@ if 0: # look at nbr counts in YFV data
     #exit()
 
 
-    radius = 24.5
+    radius = 12.5
     bgnum = 4
     max_evalue = 0.1
     num_lines = 50
