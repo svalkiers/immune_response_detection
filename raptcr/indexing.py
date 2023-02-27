@@ -35,6 +35,9 @@ class BaseIndex(ABC):
                 if self.hasher.full_tcr:
                     for i, x in enumerate(self.hasher.tcrs.iterrows()):
                         self.ids[i] = x[1]['v_call'] + "_" + x[1]['junction_aa']
+            else:
+                for i, x in enumerate(X):
+                    self.ids[i] = x
         else:
             for i, x in enumerate(X):
                 self.ids[i] = x
@@ -87,7 +90,7 @@ class BaseIndex(ABC):
         return KnnResult(y, D, I, self.ids)
 
     def _within_radius(self, x, r):
-        if len(x.shape) <= 0:
+        if len(x.shape) == 1:
             xq = np.expand_dims(x, axis=0)
         else:
             xq = x

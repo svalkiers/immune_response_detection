@@ -6,7 +6,7 @@ from scipy.stats import hypergeom
 from multiprocessing import Pool, cpu_count
 from typing import Union
 
-from .hashing import Cdr3Hasher
+from .hashing import Cdr3Hasher, TCRDistEncoder
 from .indexing import IvfIndex
 from .analysis import TcrCollection
 from .constants.datasets import sample_cdr3s
@@ -36,36 +36,42 @@ def find_neighbors_within_radius(query, dataset, hasher:Cdr3Hasher, r:Union[floa
     index = IvfIndex(hasher=hasher, n_centroids=k, n_probe=p)
     index.add(dataset)
 
-    if ncpus > 1:
-        '''
-        !!!
-        Seems to work slower than running on single core
-        Check whether faiss uses parallel processing under the hood for index searching
+    # if ncpus > 1:
+    #     '''
+    #     !!!
+    #     Seems to work slower than running on single core
+    #     Check whether faiss uses parallel processing under the hood for index searching
 
-        From the faiss documentation:
-        Faiss itself is internally threaded in a couple of different ways. 
-        For CPU Faiss, the three basic operations on indexes (training, adding, searching) are internally multithreaded
+    #     From the faiss documentation:
+    #     Faiss itself is internally threaded in a couple of different ways. 
+    #     For CPU Faiss, the three basic operations on indexes (training, adding, searching) are internally multithreaded
 
-        --> Remove this functionality as it is redundant and results in more overhead
-        '''
-        with Pool(ncpus) as pool:
-            counts = parmap.map(
-                nneighbors,
-                query,
-                index=index,
-                r=.1,
-                exclude_self=True
-                )
-        
-    else:
-        counts = [nneighbors(seq=seq, index=index, r=0.1, exclude_self=True) for seq in query]
+    #     --> Remove this functionality as it is redundant and results in more overhead
+    #     '''
+    #     with Pool(ncpus) as pool:counts = [nneighbors(seq=seq, index=index, r=0.1, exclude_self=True) for seq in query]
+    #         counts = parmap.map(
+    #             nneighbors,
+    #             query,
+    #             index=index,
+    #             r=.1,
+    #             exclude_self=True
+    #             )
+    # else:
+
+    if isinstance(query, list):
+        counts = [nneighbors(seq=seq, index=index, r=r, exclude_self=True) for seq in query]
+    # THIS PART NEEDS TO BE REWORKED AS TO NOT ALWAYS CONSTRUCT A DATAFRAME STRUCTURE
+    # SLOW!!!
+    elif isinstance(query, pd.DataFrame):
+        counts = [nneighbors(seq=pd.DataFrame(seq[1]).T, index=index, r=r, exclude_self=True) for seq in query.iterrows()]
+
     return dict(counts)
 
 class NeighborEnrichment():
     def __init__(
         self,
-        repertoire:Union[TcrCollection,list],
-        hasher:Cdr3Hasher,
+        repertoire:Union[TcrCollection, pd.DataFrame, list],
+        hasher:Union[Cdr3Hasher, TCRDistEncoder],
         radius=.1,
         custom_background=None,
         ncpus:int=1
