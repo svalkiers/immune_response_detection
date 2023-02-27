@@ -33,6 +33,7 @@ parser.add_argument('--num_nbrs', type=int)
 parser.add_argument('--bg_nums', nargs='*', type=int) # which bg reps to use
 parser.add_argument('--aa_mds_dim', type=int, default=8)
 parser.add_argument('--filename')
+parser.add_argument('--skip_fg', action='store_true')
 
 args = parser.parse_args()
 
@@ -98,17 +99,17 @@ elif args.mode == 'brit_vs_bg': # britanova vs background searches
     junctions = tcrdist.tcr_sampler.parse_tcr_junctions(organism, tcr_tuples)
     junctions = add_vdj_splits_info_to_junctions(junctions)
 
-    # fg radius search:
-    idx = faiss.IndexFlatL2(vecs.shape[1])
-    idx.add(vecs)
-    start = timer()
-    lims,D,I = idx.range_search(vecs, args.radius)
-    print(f'fg range_search took {timer()-start:.2f} secs', len(vecs))
-    nbr_counts = lims[1:]-lims[:-1] - 1 # exclude self
+    if not args.skip_fg: # fg radius search:
+        idx = faiss.IndexFlatL2(vecs.shape[1])
+        idx.add(vecs)
+        start = timer()
+        lims,D,I = idx.range_search(vecs, args.radius)
+        print(f'fg range_search took {timer()-start:.2f} secs', len(vecs))
+        nbr_counts = lims[1:]-lims[:-1] - 1 # exclude self
 
-    outfile = f'{args.outfile_prefix}_fg_nbr_counts.npy'
-    np.save(outfile, nbr_counts)
-    print('made:', outfile, flush=True)
+        outfile = f'{args.outfile_prefix}_fg_nbr_counts.npy'
+        np.save(outfile, nbr_counts)
+        print('made:', outfile, flush=True)
 
 
     for bgnum in bg_nums:
@@ -177,18 +178,18 @@ elif args.mode == 'nndists_vs_bg': # britanova vs background searches
     junctions = tcrdist.tcr_sampler.parse_tcr_junctions(organism, tcr_tuples)
     junctions = add_vdj_splits_info_to_junctions(junctions)
 
-    # fg radius search:
-    idx = faiss.IndexFlatL2(vecs.shape[1])
-    idx.add(vecs)
-    start = timer()
+    if not args.skip_fg: # fg radius search:
+        idx = faiss.IndexFlatL2(vecs.shape[1])
+        idx.add(vecs)
+        start = timer()
 
-    D,I = idx.search(vecs, args.num_nbrs+1)
-    nndists = np.mean(D[:,1:], axis=-1)
-    print(f'knn search took {timer()-start:.2f} secs', len(vecs))
+        D,I = idx.search(vecs, args.num_nbrs+1)
+        nndists = np.mean(D[:,1:], axis=-1)
+        print(f'knn search took {timer()-start:.2f} secs', len(vecs))
 
-    outfile = f'{args.outfile_prefix}_fg_nndists.npy'
-    np.save(outfile, nndists)
-    print('made:', outfile, flush=True)
+        outfile = f'{args.outfile_prefix}_fg_nndists.npy'
+        np.save(outfile, nndists)
+        print('made:', outfile, flush=True)
 
 
     for bgnum in bg_nums:

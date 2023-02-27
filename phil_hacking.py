@@ -22,6 +22,12 @@ from phil_functions import *
 ## testing new functions:
 
 def read_yfv_tcrs(fname, min_count=2):
+    ''' Read in the yellow fever datasets, Hutch copies can be found at
+    rhino01:/loc/no-backup/pbradley/share/sebastiaan/yellow_fever/
+
+    they were downloaded from
+    https://github.com/mptouzel/pogorelyy_et_al_2018/tree/master/Yellow_fever
+    '''
     print('reading:', fname)
     tcrs = pd.read_table(fname)
     tcrs.rename(columns={'Clone count':'count',
@@ -68,11 +74,13 @@ def calc_tcrdist_matrix(df1, df2, tcrdister):
 
 
 
-if 0: # read, parse, and subset the YFV d15 tcrs
+if 0: # read, parse, and subset the YFV d0 and d15 tcrs
     min_count = 2
     yfvdir = '/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
-    files = glob(yfvdir+'??_15_F?_.txt')
-    assert len(files) == 7
+    files = glob(yfvdir+'??_0_F?_.txt')
+    assert len(files) == 12
+    #files = glob(yfvdir+'??_15_F?_.txt')
+    #assert len(files) == 7
 
     for fname in files:
         tcrs = read_yfv_tcrs(fname)
@@ -82,7 +90,7 @@ if 0: # read, parse, and subset the YFV d15 tcrs
 
     exit()
 
-if 0: # testing new background model
+if 0: # testing new background model; it's not that great!
     import tcrdist
     organism = 'human'
 
@@ -100,11 +108,13 @@ if 0: # testing new background model
     exit()
 
 
-if 0: # look at YFV nndists for expanding clones
+if 1: # look at YFV nndists for expanding clones
+    # this made the colorful NNbr-distances figure
     import faiss
 
-    runtag = 'run12'
-    #runtag = 'run11'
+    #runtag = 'run14' # d0 10 nbrs, bgnums 4,5
+    #runtag = 'run12' # d15 25 nbrs
+    runtag = 'run11' # d15 10 nbrs
     bgnum = 4
     aa_mds_dim = 8 # for finding nbrs of expanding clones
 
@@ -128,11 +138,15 @@ if 0: # look at YFV nndists for expanding clones
     xclones['aatcr'] = xclones.v + '_' + xclones.cdr3aa
     print('num_xclones:', xclones.shape[0])
 
-    fg_files = sorted(glob('/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
-                           '*min_count_2.txt.gz'))
+    # fg_files = sorted(glob('/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
+    #                        '??_0_*min_count_2.txt.gz'))
+    # assert len(fg_files) == 12
+    fg_files=sorted(glob('/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
+                           '??_15_*min_count_2.txt.gz'))
     assert len(fg_files) == 7
     #fg_files = fg_files[2:3]
 
+    #nrows, ncols = 3, 4
     nrows, ncols = 2, 4
     plt.figure(figsize=(ncols*4, nrows*4))
 
@@ -192,11 +206,19 @@ if 0: # look at YFV nndists for expanding clones
         plt.plot([0,100],[0,100],':k')
         plt.title(fg_tag)
 
-        plt.scatter(fg_nndists[xnbrs2_mask], bg_nndists[xnbrs2_mask], s=5, alpha=0.5)
-        plt.scatter(fg_nndists[xnbrs1_mask], bg_nndists[xnbrs1_mask], s=5, alpha=0.5)
+        plt.scatter(fg_nndists[xnbrs2_mask], bg_nndists[xnbrs2_mask], s=5, alpha=0.5,
+                    label='dist<24.5 to expd. clone')
+        plt.scatter(fg_nndists[xnbrs1_mask], bg_nndists[xnbrs1_mask], s=5, alpha=0.5,
+                    label='dist<12.5 to expd. clone')
 
         xinds = np.nonzero(np.array(xmask))[0]
-        plt.scatter(fg_nndists[xinds], bg_nndists[xinds], s=5, alpha=1)
+        plt.scatter(fg_nndists[xinds], bg_nndists[xinds], s=5, alpha=1,
+                    label='YFV-expanding clone')
+        plt.legend(fontsize=8, loc='lower right')
+        if plotno%ncols==0:
+            plt.ylabel('avg dist to 10 NNbrs (10 background reps)')
+        if plotno//ncols==nrows-1:
+            plt.xlabel('avg dist to 10 NNbrs')
 
 
 
@@ -209,19 +231,37 @@ if 0: # look at YFV nndists for expanding clones
 
     exit()
 
-if 1: # look at nbr counts in YFV data
+if 0: # look at nbr counts in YFV data
+    # this made the figure with the Evalue panels and the tcr-graph panels
+    #
     import tcrdist
     import networkx as nx
     from scipy.spatial.distance import squareform, pdist
     import faiss
 
     aa_mds_dim = 8
-    fg_files = sorted(glob('/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
-                           '*min_count_2.txt.gz'))
+    radius = 12.5
+    bgnum = 4
+    max_evalue = 0.1
+    num_lines = 50
+    target_bg_nbrs = None
+    COLOR_GRAPH_BY_EVALUE = False
+
+    # fg_files=sorted(glob('/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
+    #                        '??_0_*min_count_2.txt.gz'))
+    # assert len(fg_files) == 12
+    # prefix_for_bg = '/home/pbradley/csdat/raptcr/slurm/run13/run13'
+    # prefix_for_cb = '/home/pbradley/csdat/raptcr/slurm/run15/run15'
+    # bg_nums = [4,5]
+    fg_files= sorted(glob('/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
+                            '??_15_*min_count_2.txt.gz'))
     assert len(fg_files) == 7
+    prefix_for_bg = '/home/pbradley/csdat/raptcr/slurm/run9/run9' # day 15
+    prefix_for_cb = '/home/pbradley/csdat/raptcr/slurm/run10/run10'
+    bg_nums = range(6)
 
 
-    fg_files = fg_files[3:4]
+    #fg_files = fg_files[3:4]
 
     #fg_files = fg_files[-2:]
     #fg_files = fg_files[:1]
@@ -252,23 +292,21 @@ if 1: # look at nbr counts in YFV data
     #exit()
 
 
-    radius = 12.5
-    bgnum = 4
-    max_evalue = 0.1
-    num_lines = 50
-    target_bg_nbrs = None
 
-    nplots = 3*len(fg_files)
+    plotno_scale = 2+COLOR_GRAPH_BY_EVALUE
+    nplots = plotno_scale*len(fg_files)
     nrows = max(1, int(0.8*np.sqrt(nplots)))
     ncols = (nplots-1)//nrows + 1
     print(nrows, ncols, fg_files)
+    nrows, ncols = 2,7 # hack
     plt.figure(figsize=(ncols*3, nrows*3))
-    pngfile = ('/home/pbradley/csdat/raptcr/'
-               f'yfv_run9_pvals_F{len(fg_files)}_{radius:.1f}_bg{bgnum}_'
+
+
+    pngfile = ('/home/pbradley/csdat/raptcr/yfv_'+prefix_for_bg.split('/')[-1]+
+               f'_pvals_F{len(fg_files)}_{radius:.1f}_bg{bgnum}_'
                f'tbn{target_bg_nbrs}.png')
 
-    run9prefix = '/home/pbradley/csdat/raptcr/slurm/run9/run9'
-    run10prefix = '/home/pbradley/csdat/raptcr/slurm/run10/run10'
+    # for getting the sizes of the britanova cord blood reps
     run4prefix = '/home/pbradley/csdat/raptcr/slurm/run4/run4'
 
     # read the rep sizes
@@ -285,24 +323,24 @@ if 1: # look at nbr counts in YFV data
         fg_tag = fg_file.split('/')[-1][:-3]
         tcrs = read_britanova_tcrs(fg_file)
 
-        my_counts_files = glob(f'{run9prefix}_{fg_tag}_{radius:.1f}_*npy')
+        my_counts_files = glob(f'{prefix_for_bg}_{fg_tag}_{radius:.1f}_*npy')
         print(fg_tag, 'numfiles:', len(my_counts_files))
-        if len(my_counts_files)<70:
-            continue
-        assert len(my_counts_files) == 70
+        # if len(my_counts_files)<70:
+        #     continue
+        # assert len(my_counts_files) == 70
 
         # read fg counts
-        fg_counts = np.load(f'{run9prefix}_{fg_tag}_{radius:.1f}_r0_fg_nbr_counts.npy')
+        fg_counts=np.load(f'{prefix_for_bg}_{fg_tag}_{radius:.1f}_r0_fg_nbr_counts.npy')
         num_tcrs = fg_counts.shape[0]
         assert num_tcrs == tcrs.shape[0]
 
         # read bg counts, compute pvals
         all_bg_counts = {}
-        for bg in range(6):
+        for bg in bg_nums:
             print('reading bg counts:', bg)
             bg_counts = np.zeros((num_tcrs,))
             for r in range(10):
-                bg_counts += np.load(f'{run9prefix}_{fg_tag}_{radius:.1f}_r{r}_bg_'
+                bg_counts += np.load(f'{prefix_for_bg}_{fg_tag}_{radius:.1f}_r{r}_bg_'
                                      f'{bg}_nbr_counts.npy')
             all_bg_counts[bg] = bg_counts
 
@@ -332,7 +370,7 @@ if 1: # look at nbr counts in YFV data
                                            tcrdister)
 
         #read nbr counts in other britanova reps
-        fgfiles = glob(f'{run10prefix}_{fg_tag}_{radius:.1f}_'
+        fgfiles = glob(f'{prefix_for_cb}_{fg_tag}_{radius:.1f}_'
                        'bg_A5-*.txt_nbr_counts.npy')
 
         all_fg_counts = {}
@@ -351,7 +389,7 @@ if 1: # look at nbr counts in YFV data
             num_cells = sum(tcrs[same_tcr_mask]['count'])
             obs = fg_counts[ind]
             msg= f'eval: {l.evalue:9.2e} {obs:3d} {l.expected_nbrs:5.1f} bg%'
-            for bg in range(6):
+            for bg in bg_nums:
                 expect = all_bg_counts[bg][ind] / 10.
                 msg += f' {100*expect/obs:3.0f}'
             msg += ' fg%'
@@ -366,7 +404,8 @@ if 1: # look at nbr counts in YFV data
 
 
         # plotting ###
-        plt.subplot(nrows, ncols, 3*plotno+1)
+        #plt.subplot(nrows, ncols, plotno_scale*plotno+1)
+        plt.subplot(2,7,plotno+1) # hack
         plt.title(f'{fg_tag[:9]} N={num_tcrs} R={radius:.1f} {pvals.shape[0]}',
                   fontsize=7)
         #bg_scale = num_bg_tcrs/num_tcrs
@@ -385,6 +424,9 @@ if 1: # look at nbr counts in YFV data
         plt.xlim((mn,mx)) # dunno why we need this?!?
         mn,mx = plt.ylim()
         plt.ylim((-0.1, max(mx,15.)))
+        plt.xlabel('expected_num_nbrs (based on sim. background)', fontsize=6)
+        if plotno==0:
+            plt.ylabel('-1*log_10(E-value)')
 
 
         ## draw a graph of the significant tcrs with edges between tcrs whose
@@ -408,6 +450,7 @@ if 1: # look at nbr counts in YFV data
             if i<j:
                 g.add_edge(i,j)
 
+        # right now these labels are not being used...
         comps = list(nx.connected_components(g))
         print('num comps:', len(comps))
         labels = {x:'' for x in range(pvals.shape[0])}
@@ -422,22 +465,26 @@ if 1: # look at nbr counts in YFV data
         k = 2/np.sqrt(pvals.shape[0]) # default is 1/sqrt(N)
         pos = nx.drawing.layout.spring_layout(g, k=k)
 
-        plt.subplot(nrows, ncols, 3*plotno+2)
-        plt.title('color by evalue')
-        colors = [-1*np.log10(pvals.iloc[x]['evalue']) for x in list(g)]
-        nx.draw_networkx(g, pos, ax=plt.gca(), node_size=10, with_labels=False,
-                         # labels=labels,
-                         node_color=colors)#, vmin=0, vmax = 48)
+        if COLOR_GRAPH_BY_EVALUE:
+            plt.subplot(nrows, ncols, plotno_scale*plotno+2)
+            plt.title('color by evalue')
+            colors = [-1*np.log10(pvals.iloc[x]['evalue']) for x in list(g)]
+            nx.draw_networkx(g, pos, ax=plt.gca(), node_size=10, with_labels=False,
+                             # labels=labels,
+                             node_color=colors)#, vmin=0, vmax = 48)
 
-        plt.subplot(nrows, ncols, 3*plotno+3)
-        plt.title('color by mindist to expanding clone')
+        #plt.subplot(nrows, ncols, plotno_scale*plotno+2+COLOR_GRAPH_BY_EVALUE)
+        plt.subplot(2,7,7+plotno+1) # hack
+        plt.title('tcr graph colored by mindist to YFV-expanding clone\n'
+                  '(blue: tcrdist=0 to yellow: tcrdist>=48', fontsize=8)
         min_xclonedists = xclone_dists.min(axis=1)
         assert min_xclonedists.shape == (pvals.shape[0],)
         colors = [min_xclonedists[x] for x in list(g)]
         nx.draw_networkx(g, pos, ax=plt.gca(), node_size=10, with_labels=False,
                          # labels=labels,
                          node_color=colors, vmin=0, vmax = 48)
-
+        plt.ylabel('nodes are tcrs w/ significant E-values', fontsize=8)
+        plt.xlabel(f'edges connect tcrs w/ dist<= {radius:.1f}', fontsize=8)
 
 
         #run5_A3-i107.txt_6.5_bg_A5-S11.txt_nbr_counts.npy
@@ -464,7 +511,7 @@ if 0: # look at nbr counts in the britanova set
 
     fg_files = get_original_18_fnames()
 
-    #fg_files = fg_files[-1:]
+    fg_files = fg_files[-1:]
 
     #fg_files = fg_files[-2:]
     #fg_files = fg_files[:1]
@@ -472,7 +519,8 @@ if 0: # look at nbr counts in the britanova set
 
     radius = 12.5
     bgnum = 4
-    max_evalue = 0.1
+    max_evalue = 10 #0.1
+    #max_evalue = 0.1
     num_lines = 50
     target_bg_nbrs = None
 
@@ -599,6 +647,94 @@ if 0: # look at nbr counts in the britanova set
 
 
 
+if 0: # make multi-panel plot of pvals across different radii and britanova
+    # repertoires
+    from scipy.stats import hypergeom
+
+    runtag = 'run4' ; max_tcrs = 500000
+    #runtag = 'run1' ; max_tcrs = 100000
+    rundir = f'/home/pbradley/csdat/raptcr/slurm/{runtag}/'
+    files = glob(f'{rundir}{runtag}*nbr_counts.npy')
+
+    ftags = sorted(set(x.split('/')[-1].split('_')[1] for x in files))
+    radii = sorted(set(float(x.split('/')[-1].split('_')[2]) for x in files))
+
+    min_fg_nbrs = 2
+    max_expected_fg_nbrs = 500000 #5
+
+    bgnums = [4]
+    #bgnums = list(range(5))
+
+    my_ftags = ftags[:]
+    #my_ftags = ftags[:1]+ftags[-1:]
+    #my_ftags = ftags[:5]+ftags[-5:]
+    #my_ftags = ftags[:1]
+
+    nrows = len(my_ftags)
+    ncols = len(radii)
+    plt.figure(figsize=(ncols*4, nrows*4))
+
+    for row, ftag in enumerate(my_ftags):
+        fname = ('/home/pbradley/gitrepos/immune_response_detection/data/phil/'
+                 f'britanova/{ftag}.gz')
+        tcrs = read_britanova_tcrs(fname, max_tcrs=max_tcrs)
+        num_tcrs = tcrs.shape[0]
+        print('num_tcrs:', num_tcrs, ftag)
+
+        for col, radius in enumerate(radii):
+            fname = f'{rundir}{runtag}_{ftag}_{radius:.1f}_r0_fg_nbr_counts.npy'
+            fg_counts = np.load(fname)
+            assert num_tcrs == fg_counts.shape[0]
+            bg_counts = np.zeros((num_tcrs,))
+            num_bg_reps = 0
+            for r in range(10):
+                for bgnum in bgnums:
+                    fname = (f'{rundir}{runtag}_{ftag}_{radius:.1f}_r{r}_bg_{bgnum}_'
+                             'nbr_counts.npy')
+                    counts = np.load(fname)
+                    assert counts.shape[0] == num_tcrs
+                    bg_counts += counts
+                    num_bg_reps += 1
+            num_bg_tcrs = num_tcrs * num_bg_reps
+
+            min_fg_bg_nbr_ratio = 2. # actually these are the function defaults
+            max_fg_bg_nbr_ratio = 100
+            pvals = compute_nbr_count_pvalues(
+                fg_counts, bg_counts, num_bg_tcrs,
+                min_fg_bg_nbr_ratio=min_fg_bg_nbr_ratio,
+                max_fg_bg_nbr_ratio=max_fg_bg_nbr_ratio,
+                target_bg_nbrs=None,
+            )
+
+            mask = (pvals.evalue<0.05)
+            print('num_sig:', mask.sum(), radius, ftag)
+            pvals = pvals[mask]
+            plt.subplot(nrows, ncols, row*ncols+col+1)
+            plt.title(f'{ftag} N={num_tcrs} R={radius:.1f} {mask.sum()}')
+            #bg_scale = num_bg_tcrs/num_tcrs
+            xvals = np.log10(1+pvals.expected_nbrs)
+            yvals = -1*np.log10(pvals.evalue)
+            cvals = np.log10(pvals.fg_bg_nbr_ratio)
+            plt.scatter(xvals, yvals, c=cvals,
+                        vmin=np.log10(min_fg_bg_nbr_ratio),
+                        vmax=np.log10(max_fg_bg_nbr_ratio))
+
+            if row==nrows-1:
+                plt.xlabel('log_10(1+expected_num_nbrs)')
+            if col==0:
+                plt.ylabel('-1*log_10(E-value)')
+            if col==ncols-1:
+                plt.colorbar()
+    plt.tight_layout()
+    bgtag = ''.join(map(str,bgnums))
+    pngfile = f'/home/pbradley/csdat/raptcr/{runtag}_brit_pvals_bg{bgtag}.png'
+    plt.savefig(pngfile, dpi=100)
+    print('made:', pngfile)
+    exit()
+
+
+
+
 if 0: # setup for big cluster calc, brit-vs-brit nbrs
     # this block generates a file containing commands
     # those commands get distributed over the cluster
@@ -606,14 +742,16 @@ if 0: # setup for big cluster calc, brit-vs-brit nbrs
     PY = '/home/pbradley/miniconda3/envs/raptcr/bin/python'
     EXE = '/home/pbradley/gitrepos/immune_response_detection/phil_running.py'
 
-    radii = [3.5, 6.5, 12.5, 18.5, 24.5]
+    radii = [12.5, 18.5, 24.5]
+    #radii = [3.5, 6.5, 12.5, 18.5, 24.5]
 
     britdir = DATADIR+'phil/britanova/'
     yfvdir = '/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
     df = pd.read_table(britdir+'metadata.txt')
 
 
-    fg_fnames = sorted(glob(yfvdir+'*count_2.txt.gz')) ; assert len(fg_fnames)==7
+    fg_fnames = sorted(glob(yfvdir+'??_0_*count_2.txt.gz')) ; assert len(fg_fnames)==12
+    #fg_fnames = sorted(glob(yfvdir+'*count_2.txt.gz')) ; assert len(fg_fnames)==7
     #fg_fnames = [f'{britdir}{x}.gz' for x in df.file_name]
     bg_fnames = [f'{britdir}{x}.gz' for x,y in zip(df.file_name, df.age) if y==0]
 
@@ -621,7 +759,8 @@ if 0: # setup for big cluster calc, brit-vs-brit nbrs
     #               'data/phil/britanova/A*gz')
     print(len(fg_fnames), len(bg_fnames))
 
-    runtag = 'run10' ; xargs = ' --max_tcrs 500000 ' # now yfv day15
+    runtag = 'run15' ; xargs = ' --max_tcrs 500000 ' # now yfv day0
+    #runtag = 'run10' ; xargs = ' --max_tcrs 500000 ' # now yfv day15
     #runtag = 'run7' ; xargs = ' --max_tcrs 500000 ' # now full britanova download
     #runtag = 'run5' ; xargs = ' --max_tcrs 500000 ' # original set of 18
 
@@ -659,12 +798,16 @@ if 0: # setup for big nndists calc on cluster
     num_repeats = 10
 
     fnames = glob('/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
-                  '*min_count_2.txt.gz')
+                  '??_0_*min_count_2.txt.gz') ; assert len(fnames) == 12
+    # fnames = glob('/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
+    #               '*min_count_2.txt.gz')
     #fnames = glob('/home/pbradley/gitrepos/immune_response_detection/'
     #              'data/phil/britanova/A*gz')
     print(len(fnames))
 
-    runtag = 'run12' ; xargs = ' --num_nbrs 25 '
+
+    runtag = 'run14' ; xargs = ' --num_nbrs 10 '; bg_nums = [4,5]
+    # runtag = 'run12' ; xargs = ' --num_nbrs 25 '
     #runtag = 'run11' ; xargs = ' --num_nbrs 10 '
 
     rundir = f'/home/pbradley/csdat/raptcr/slurm/{runtag}/'
@@ -676,13 +819,16 @@ if 0: # setup for big nndists calc on cluster
     out = open(cmds_file,'w')
 
     for fname in fnames:
-        for bgnum in range(6):
+        for bgnum in bg_nums:
             ftag = fname.split('/')[-1][:-3]
             for repeat in range(num_repeats):
+                xxargs = ' --skip_fg ' if repeat>0 else ''
                 outfile_prefix = f'{rundir}{runtag}_{ftag}_r{repeat}'
-                cmd = (f'{PY} {EXE} {xargs} --mode nndists_vs_bg --bg_nums {bgnum} '
+                cmd = (f'{PY} {EXE} {xargs} {xxargs} --mode nndists_vs_bg '
+                       f' --bg_nums {bgnum} '
                        f' --filename {fname} --outfile_prefix {outfile_prefix} '
-                       f' > {outfile_prefix}.log 2> {outfile_prefix}.err')
+                       f' > {outfile_prefix}_{bgnum}.log '
+                       f' 2> {outfile_prefix}_{bgnum}.err')
                 out.write(cmd+'\n')
     out.close()
     print('made:', cmds_file)
@@ -698,16 +844,21 @@ if 0: # setup for big calc
     PY = '/home/pbradley/miniconda3/envs/raptcr/bin/python'
     EXE = '/home/pbradley/gitrepos/immune_response_detection/phil_running.py'
 
-    radii = [3.5, 6.5, 12.5, 18.5, 24.5]
+    radii = [12.5, 18.5, 24.5]
+    #radii = [3.5, 6.5, 12.5, 18.5, 24.5]
     num_repeats = 10
+    bg_nums = [4,5]
 
     fnames = glob('/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
-                  '*min_count_2.txt.gz')
+                  '??_0_*min_count_2.txt.gz') ; assert len(fnames) == 12
+    # fnames = glob('/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
+    #               '*min_count_2.txt.gz')
     #fnames = glob('/home/pbradley/gitrepos/immune_response_detection/'
     #              'data/phil/britanova/A*gz')
     print(len(fnames))
 
-    runtag = 'run9' ; xargs = ' --max_tcrs 500000 ' # yfv day 15
+    runtag = 'run13' ; xargs = ' --max_tcrs 500000 ' # yfv day 0
+    #runtag = 'run9' ; xargs = ' --max_tcrs 500000 ' # yfv day 15
     #runtag = 'run8' ; xargs = ' --max_tcrs 500000 --bg_nums 5 ' # new bg model
     #runtag = 'run6' ; xargs = ' --max_tcrs 500000 ' # new repertoires
     #runtag = 'run4' ; xargs = ' --max_tcrs 500000 ' # new 5th bg rep
@@ -727,12 +878,15 @@ if 0: # setup for big calc
         ftag = fname.split('/')[-1][:-3]
         for radius in radii:
             for repeat in range(num_repeats):
-                outfile_prefix = f'{rundir}{runtag}_{ftag}_{radius:.1f}_r{repeat}'
-                cmd = (f'{PY} {EXE} {xargs} --mode brit_vs_bg '
-                       f' --filename {fname} --radius {radius} '
-                       f' --outfile_prefix {outfile_prefix} '
-                       f' > {outfile_prefix}.log 2> {outfile_prefix}.err')
-                out.write(cmd+'\n')
+                for bg_num in bg_nums:
+                    xxargs = ' --skip_fg ' if repeat>0 else ''
+                    outfile_prefix = f'{rundir}{runtag}_{ftag}_{radius:.1f}_r{repeat}'
+                    cmd = (f'{PY} {EXE} {xargs} {xxargs} --mode brit_vs_bg '
+                           f' --filename {fname} --radius {radius} --bg_nums {bg_num} '
+                           f' --outfile_prefix {outfile_prefix} '
+                           f' > {outfile_prefix}_{bg_num}.log '
+                           f' 2> {outfile_prefix}_{bg_num}.err')
+                    out.write(cmd+'\n')
     out.close()
     print('made:', cmds_file)
 
