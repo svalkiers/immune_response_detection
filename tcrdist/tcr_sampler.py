@@ -455,7 +455,7 @@ def parse_tcr_junctions( organism, tcrs):
     dfl = []
 
     for ii, (atcr, btcr) in enumerate(tcrs):
-        if ii%10000==0:
+        if ii%50000==0:
             print('parse_tcr_junctions:', ii, len(tcrs))
 
         results = OrderedDict()
@@ -474,7 +474,7 @@ def parse_tcr_junctions( organism, tcrs):
             assert a_trims[1]+a_trims[2] == 0
             assert a_inserts[1]+a_inserts[2] == 0
 
-            a_indels = f'+{sum(a_inserts)}-{sum(a_trims)}'
+            a_indels = f'+{a_inserts[3]}-{sum(a_trims)}'
             results.update(OrderedDict(
                 clone_index=ii,
                 va=va,
@@ -500,7 +500,7 @@ def parse_tcr_junctions( organism, tcrs):
 
             _, cdr3b_protseq_masked, _, b_trims, b_inserts, cdr3b_nucseq_src = bresults
 
-            b_indels = f'+{sum(b_inserts)}-{sum(b_trims)}'
+            b_indels = f'+{sum(b_inserts[1:])}-{sum(b_trims)}'
 
             results.update(OrderedDict(
                 clone_index=ii,
@@ -540,6 +540,7 @@ def resample_shuffled_tcr_chains(
         chain, # 'A' or 'B'
         junctions_df, # dataframe made by the above function
         preserve_vj_pairings = False,
+        return_src_junction_indices = False,
 ):
     ''' returns list of (v_gene, j_gene, cdr3, cdr3_nucseq) for inputting into tcrdist calcs (e.g.)
 
@@ -552,7 +553,7 @@ def resample_shuffled_tcr_chains(
     # breakpoints sets could contain negative numbers: that means read from the back
     #
     junctions = []
-    for l in junctions_df.itertuples():
+    for ind, l in enumerate(junctions_df.itertuples()):
         # where are the acceptable breakpoints?
         # dont allow breakpoints in the middle of V D or J
         # the breakpoint is the index we can use as in  nucseq = nucseq1[:breakpoint] + nucseq2[breakpoint:]
@@ -560,13 +561,15 @@ def resample_shuffled_tcr_chains(
         breakpoints_post_d = set()
         nucseq_src = l.cdr3a_nucseq_src if chain == 'A' else l.cdr3b_nucseq_src
         #
-        post_d = False
+        pre_d = True
+        post_d = 'D' not in nucseq_src
         for ii in range(1,len(nucseq_src)):
             ## ii refers to the breakpoint between position ii-1 and position ii
             ## ie, right before position ii
             a,b = nucseq_src[ii-1], nucseq_src[ii]
             if a=='D':
                 post_d = True
+                pre_d = False
             if a==b and a!='N':
                 #bad
                 pass
@@ -575,14 +578,14 @@ def resample_shuffled_tcr_chains(
                 for bp in [ii, ii-len(nucseq_src)]:
                     if post_d:
                         breakpoints_post_d.add(bp)
-                    else:
+                    if pre_d:
                         breakpoints_pre_d.add(bp)
         if chain=='A':
             junctions.append( (l.va, l.ja, l.cdr3a_nucseq,
-                               breakpoints_pre_d, breakpoints_post_d))
+                               breakpoints_pre_d, breakpoints_post_d, ind))
         else:
             junctions.append( (l.vb, l.jb, l.cdr3b_nucseq,
-                               breakpoints_pre_d, breakpoints_post_d))
+                               breakpoints_pre_d, breakpoints_post_d, ind))
 
     if preserve_vj_pairings:
         # setup a mapping from v/j genes to junctions
@@ -612,6 +615,7 @@ def resample_shuffled_tcr_chains(
 
 
     new_tcrs = []
+    src_junction_indices = []
     attempts = 0
     successes = 0
     while len(new_tcrs) < num_samples:
@@ -658,6 +662,7 @@ def resample_shuffled_tcr_chains(
                     # print('tn', translation.get_translation(t_new[3]), t_new)
                     # print(bp, nucseq)
                     new_tcrs.append(t_new)
+                    src_junction_indices.append((t1[-1], t2[-1], bp))
                     break
         #print('success:', success)
         attempts += 1
@@ -665,7 +670,10 @@ def resample_shuffled_tcr_chains(
         if success and len(new_tcrs) >= num_samples:
             break
     print(f'success_rate: {100.0*successes/attempts:.2f}')
-    return new_tcrs
+    if return_src_junction_indices:
+        return new_tcrs, src_junction_indices
+    else:
+        return new_tcrs
 
 
 

@@ -9,437 +9,685 @@ from timeit import default_timer as timer
 from sklearn.manifold import MDS
 from collections import Counter
 from sys import exit
+import sys
 from os.path import exists
 from glob import glob
 from os import mkdir, system
+import random
+
+from phil_functions import *
+
+MAIN = __name__ == '__main__'
+
+## testing new functions:
+
+def read_yfv_tcrs(fname, min_count=2):
+    print('reading:', fname)
+    tcrs = pd.read_table(fname)
+    tcrs.rename(columns={'Clone count':'count',
+                         'All V hits':'v',
+                         'All J hits':'j',
+                         'N. Seq. CDR3':'cdr3nt',
+                         'AA. Seq. CDR3':'cdr3aa',
+                         }, inplace=True)
+    mask = tcrs['count'] >= min_count
+    print('filter by count:', mask.sum(), 'of', tcrs.shape[0])
+    tcrs = tcrs[mask]
+    tcrs['v'] = tcrs.v.str.split('*').str.get(0) + '*01'
+    tcrs['j'] = tcrs.j.str.split('*').str.get(0) + '*01'
+
+    tcrs['cdr3nt'] = tcrs.cdr3nt.str.lower()
+
+    v_column, j_column, cdr3_column, organism, chain = 'v','j','cdr3aa','human','B'
+    tcrs = filter_out_bad_genes_and_cdr3s(
+        tcrs, v_column, cdr3_column, organism, chain, j_column=j_column)
+    print('num_tcrs:', tcrs.shape[0], fname)
+    tcrs = tcrs['count v j cdr3nt cdr3aa'.split()]
+    return tcrs
+
+def get_original_18_ftags():
+    fnames = glob('/home/pbradley/csdat/raptcr/slurm/run4/*_12.5_r0_fg*py')
+    assert len(fnames) == 18
+    return sorted(x.split('_')[-6] for x in fnames)
+
+def get_original_18_fnames():
+    ftags = get_original_18_ftags()
+    dirname = '/home/pbradley/gitrepos/immune_response_detection/data/phil/britanova/'
+    return [f'{dirname}{x}.gz' for x in ftags]
 
 
-# It may be helpful to take the sqrt of this matrix if we are
-# going to use an L2 (Euclidean) distance in the embedding space...
-# Also, turns out that when we take the sqrt it does satisfy the triangle
-# inequality, which this "squared" version doesn't do.
-#
-TCRDIST_DM = np.maximum(0., np.minimum(4., 4-BLOSUM_62))
+def calc_tcrdist_matrix(df1, df2, tcrdister):
+    l1 = [(x.v, x.j, x.cdr3aa, x.cdr3nt) for x in df1.itertuples()]
+    l2 = [(x.v, x.j, x.cdr3aa, x.cdr3nt) for x in df2.itertuples()]
+    print('calc_tcrdist_matrix:', len(l1), len(l2))
 
-GAPCHAR = '-'
+    return np.array([tcrdister.single_chain_distance(a,b)
+                     for a in l1 for b in l2]).reshape((len(l1), len(l2)))
 
-DATADIR = '/home/pbradley/gitrepos/immune_response_detection/data/' # change me
-assert exists(DATADIR)
-
-# so I can import this file in jupyter notebooks: 'if MAIN:' instead of 'if 1:'
-MAIN = (__name__ == '__main__')
-
-def calc_mds_vecs(dm, n_components, return_stress = False):
-    'Helper function to run MDS'
-    mds = MDS(n_components=n_components, dissimilarity="precomputed", random_state=11,
-              normalized_stress=False)
-    vecs = mds.fit_transform(dm)
-    if return_stress:
-        return vecs, mds.stress_
-    else:
-        return vecs
-
-
-def update_hasher_aa_vectors_by_mds_tiling(dm, n_components, hasher):
-    '''Try replacing hasher's aa_vectors_ with new ones created by tiling
-    lower dimensional MDS vectors. Doesn't seem to be improve things much.
-    '''
-    assert dm.shape[0] == len(AALPHABET)
-    vecs, stress = calc_mds_vecs(dm, n_components, return_stress=True)
-    print(f'update_aa_vectors_by_mds_tiling: n_components= {n_components} '
-          f'stress= {stress:.3f}')
-    m = hasher.m
-    for vec, aa in zip(vecs, AALPHABET):
-        assert hasher.aa_vectors_[aa].shape == (m,) # sanity
-        assert vec.shape == (n_components,)
-        hasher.aa_vectors_[aa] = np.array([vec[i%n_components] for i in range(m)])
-    return
-
-
-def trim_and_gap_cdr3(cdr3, num_pos, n_trim=3, c_trim=2):
-    ''' Convert a variable length cdr3 to a fixed-length sequence in a way
-    that is consistent with tcrdist scoring, by trimming the ends and
-    inserting gaps at a fixed position
-
-    If the cdr3 is longer than num_pos + n_trim + c_trim, some residues will be dropped
-    '''
-    gappos = min(6, 3+(len(cdr3)-5)//2) - n_trim
-    r = -c_trim if c_trim>0 else len(cdr3)
-    seq = cdr3[n_trim:r]
-    afterlen = min(num_pos-gappos, len(seq)-gappos)
-    numgaps = max(0, num_pos-len(seq))
-    fullseq = seq[:gappos] + GAPCHAR*numgaps + seq[-afterlen:]
-    assert len(fullseq) == num_pos
-    return fullseq
-
-def encode_sequence(seq, aa_vectors):
-    ''' Convert a sequence to a vector by lining up the aa_vectors
-
-    length of the vector will be dim * len(seq), where dim is the dimension of the
-    embedding given by aa_vectors
-    '''
-    dim = aa_vectors['A'].shape[0]
-    vec = np.zeros((len(seq)*dim,))
-    for i,aa in enumerate(seq):
-        vec[i*dim:(i+1)*dim] = aa_vectors[aa]
-    return vec
-
-def gapped_encode_cdr3(cdr3, aa_vectors, num_pos, n_trim=3, c_trim=2):
-    ''' Convert a cdr3 of variable length to a fixed-length vector
-    by trimming/gapping and then lining up the aa_vectors
-
-    length of the vector will be dim * num_pos, where dim is the dimension of the
-    embedding given by aa_vectors
-    '''
-    return encode_sequence(trim_and_gap_cdr3(cdr3, num_pos, n_trim, c_trim),
-                           aa_vectors)
-
-
-def calc_tcrdist_aa_vectors(dim, SQRT=True, verbose=False):
-    ''' Embed tcrdist distance matrix to Euclidean space
-    '''
-    dm = np.zeros((21,21))
-    dm[:20,:20] = TCRDIST_DM
-    dm[:20,20] = 4.
-    dm[20,:20] = 4.
-    if SQRT:
-        dm = np.sqrt(dm) ## NOTE
-    vecs, stress = calc_mds_vecs(dm, dim, return_stress=True)
-    #print('vecs mean:', np.mean(vecs, axis=0)) #looks like they are already zeroed
-    vecs -= np.mean(vecs, axis=0) # I think this is unnecessary, but for sanity...
-    if verbose:
-        print(f'encoding tcrdist aa+gap matrix, dim= {dim} stress= {stress}')
-    aa_vectors = {aa:v for aa,v in zip(AALPHABET+GAPCHAR, vecs)}
-    return aa_vectors
+#####################################
 
 
 
-def gapped_encode_cdr3s(cdr3s, dim, num_pos, SQRT=True, n_trim=3, c_trim=2):
-    ''' Convert a list/Repertoire of cdr3s to fixed-length vectors
-    Uses the gapped_encode_cdr3 function above, and an aa embedding from MDS
-    of the tcrdist distance matrix.
-    '''
-    aa_vectors = calc_tcrdist_aa_vectors(dim, SQRT=SQRT, verbose=True)
-    return np.array([gapped_encode_cdr3(cdr3, aa_vectors, num_pos, n_trim, c_trim)
-                     for cdr3 in cdr3s])
+if 0: # read, parse, and subset the YFV d15 tcrs
+    min_count = 2
+    yfvdir = '/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
+    files = glob(yfvdir+'??_15_F?_.txt')
+    assert len(files) == 7
+
+    for fname in files:
+        tcrs = read_yfv_tcrs(fname)
+        outfile = f'{fname[:-4]}_min_count_{min_count}.txt'
+        tcrs.to_csv(outfile, sep='\t', index=False)
+        print('made:', outfile)
+
+    exit()
+
+if 0: # testing new background model
+    import tcrdist
+    organism = 'human'
+
+    fname = './data/phil/britanova/A5-S11.txt.gz'
+    tcrs = read_britanova_tcrs(fname)
+
+    tcr_tuples = [(None,x) for x in tcrs['v j cdr3aa cdr3nt'.split()].itertuples(
+        name=None, index=None)]
+    junctions = tcrdist.tcr_sampler.parse_tcr_junctions(organism, tcr_tuples)
+
+    junctions = add_vdj_splits_info_to_junctions(junctions)
+
+    new_tcrs = resample_cdr3_nt_regions(junctions)
+
+    exit()
 
 
-def setup_gene_cdr_strings(organism, chain):
-    ''' returns dict mapping vgene names to concatenated cdr1-cdr2-cdr2.5 strings
-    columns without any sequence variation (e.g. all gaps) are removed
-    '''
-    # remove tcrdist dependency here
-    all_genes_df = pd.read_table(DATADIR+'phil/combo_xcr.tsv')
-    all_genes_df = all_genes_df[(all_genes_df.organism==organism)&
-                                (all_genes_df.chain==chain)&
-                                (all_genes_df.region=='V')]
-    assert all_genes_df.id.value_counts().max()==1
-    all_genes_df.set_index('id', inplace=True)
-    all_genes_df['cdrs'] = all_genes_df.cdrs.str.split(';')
+if 1: # look at YFV nndists for expanding clones
+    import faiss
 
-    assert chain in ['A','B']
-    vgenes = list(all_genes_df.index)
-    gene_cdr_strings = {x:'' for x in vgenes}
+    runtag = 'run11'
+    bgnum = 4
+    aa_mds_dim = 8 # for finding nbrs of expanding clones
 
-    oldgap = '.' # gap character in the all_genes dict
-    for icdr in range(3):
-        cdrs = all_genes_df.cdrs.str.get(icdr).str.replace(oldgap,GAPCHAR,regex=False)
-        L = len(cdrs[0])
-        for i in reversed(range(L)):
-            col = set(x[i] for x in cdrs)
-            if len(col) == 1:# no variation
-                #print('drop fixed col:', col, organism, chain, icdr, i)
-                cdrs = [x[:i]+x[i+1:] for x in cdrs]
-        for g, cdr in zip(vgenes, cdrs):
-            gene_cdr_strings[g] += cdr
-    return gene_cdr_strings
+    runprefix = f'/home/pbradley/csdat/raptcr/slurm/{runtag}/{runtag}'
 
+    # read expanding clones
+    xclones = pd.read_table(
+        '/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/yfv_expanded_clones.tsv')
+    xclones.rename(columns={
+        'CDR3.nucleotide.sequence':'cdr3nt',
+        'bestVGene':'v',
+        'bestJGene':'j',
+        'CDR3.amino.acid.sequence':'cdr3aa',
+        }, inplace=True)
+    xclones['v'] = xclones.v+'*01'
+    xclones['j'] = xclones.j+'*01'
+    xclones['cdr3nt'] = xclones.cdr3nt.str.lower()
+    v_column, j_column, cdr3_column, organism, chain = 'v','j','cdr3aa','human','B'
+    xclones = filter_out_bad_genes_and_cdr3s(
+        xclones, v_column, cdr3_column, organism, chain, j_column=j_column)
+    xclones['aatcr'] = xclones.v + '_' + xclones.cdr3aa
+    print('num_xclones:', xclones.shape[0])
 
+    fg_files = sorted(glob('/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
+                           '*min_count_2.txt.gz'))
+    assert len(fg_files) == 7
+    #fg_files = fg_files[2:3]
 
-def gapped_encode_tcr_chains(
-        tcrs,
-        organism,
-        chain,
-        aa_mds_dim,
-        v_column = 'v_call',
-        cdr3_column = 'junction_aa',
-        num_pos_cdr3=16,
-        cdr3_weight=3.0,
-):
-    ''' tcrs is a DataFrame with V and CDR3 information in the named columns
-    organism is 'human' or 'mouse'
-    chain is 'A' or 'B'
-    '''
-    assert organism in ['human','mouse']
-    assert chain in ['A','B']
-    aa_vectors = calc_tcrdist_aa_vectors(aa_mds_dim, SQRT=True, verbose=True)
-    gene_cdr_strings = setup_gene_cdr_strings(organism, chain)
-    num_pos_other_cdrs = len(next(iter(gene_cdr_strings.values())))
-    assert all(len(x)==num_pos_other_cdrs for x in gene_cdr_strings.values())
+    nrows, ncols = 2, 4
+    plt.figure(figsize=(ncols*4, nrows*4))
 
-    vec_len = aa_mds_dim * (num_pos_other_cdrs + num_pos_cdr3)
-    print('gapped_encode_tcr_chains: aa_mds_dim=', aa_mds_dim,
-          'num_pos_other_cdrs=', num_pos_other_cdrs,
-          'num_pos_cdr3=', num_pos_cdr3, 'vec_len=', vec_len)
+    for plotno, fg_file in enumerate(fg_files):
+        fg_tag = fg_file.split('/')[-1][:-3]
+        donor = fg_tag[:2]
 
-    vecs = []
-    for v, cdr3 in zip(tcrs[v_column], tcrs[cdr3_column]):
-        v_vec = encode_sequence(gene_cdr_strings[v], aa_vectors)
-        cdr3_vec = np.sqrt(cdr3_weight) * gapped_encode_cdr3(
-            cdr3, aa_vectors, num_pos_cdr3)
-        vecs.append(np.concatenate([v_vec, cdr3_vec]))
-    vecs = np.array(vecs)
-    assert vecs.shape == (tcrs.shape[0], vec_len)
-    return vecs
+        tcrs = read_britanova_tcrs(fg_file)
+        tcrs['aatcr'] = tcrs.v + '_' + tcrs.cdr3aa
+        num_tcrs = tcrs.shape[0]
+
+        vecs = gapped_encode_tcr_chains(
+            tcrs, organism, chain, aa_mds_dim, v_column=v_column,
+            cdr3_column=cdr3_column).astype(np.float32)
+
+        xvecs = gapped_encode_tcr_chains(
+            xclones[xclones.donor==donor], organism, chain, aa_mds_dim,
+            v_column=v_column, cdr3_column=cdr3_column).astype(np.float32)
 
 
+        idx = faiss.IndexFlatL2(vecs.shape[1])
+        idx.add(vecs)
+        start = timer()
+        print('run range search')
+        lims,D,I = idx.range_search(xvecs, 12.5)
+        print(f'xvecs range_search took {timer()-start:.2f} seconds')
+        xnbrs1_mask = np.zeros((num_tcrs,)).astype(bool)
+        xnbrs1_mask[I] = True
+
+        start = timer()
+        print('run range search')
+        lims,D,I = idx.range_search(xvecs, 24.5)
+        print(f'xvecs range_search took {timer()-start:.2f} seconds')
+        xnbrs2_mask = np.zeros((num_tcrs,)).astype(bool)
+        xnbrs2_mask[I] = True
+
+
+        xtcrs = set(xclones[xclones.donor==donor].aatcr)
+        xmask = tcrs.aatcr.isin(xtcrs)
+        print('num xtcrs:', xmask.sum(), len(set(tcrs[xmask].aatcr)), len(xtcrs))
+
+        fname = f'{runprefix}_{fg_tag}_r0_fg_nndists.npy'
+        print(fname)
+        assert exists(fname)
+
+        fg_nndists = np.load(fname)
+        assert fg_nndists.shape == (num_tcrs,)
+
+        bg_nndists = np.zeros((num_tcrs,))
+        for r in range(10):
+            fname = f'{runprefix}_{fg_tag}_r0_bg_{bgnum}_nndists.npy'
+            bg_nndists += np.load(fname)
+        bg_nndists /= 10
+
+        plt.subplot(nrows, ncols, plotno+1)
+        plt.scatter(fg_nndists, bg_nndists, s=5, alpha=0.2)
+        plt.plot([0,100],[0,100],':k')
+        plt.title(fg_tag)
+
+        plt.scatter(fg_nndists[xnbrs2_mask], bg_nndists[xnbrs2_mask], s=5, alpha=0.5)
+        plt.scatter(fg_nndists[xnbrs1_mask], bg_nndists[xnbrs1_mask], s=5, alpha=0.5)
+
+        xinds = np.nonzero(np.array(xmask))[0]
+        plt.scatter(fg_nndists[xinds], bg_nndists[xinds], s=5, alpha=1)
 
 
 
+    plt.tight_layout()
 
-def get_nonself_nbrs_from_distances(D_in, num_nbrs):
-    'Returns the set() of all neighbor pairs, not including self in nbr list'
-    D = D_in.copy()
-    N = D.shape[0]
-    inds = np.arange(N)
-    D[inds,inds] = 1e6
-    nbrs = np.argpartition(D, num_nbrs-1)[:,:num_nbrs]
-    nbrs_set = set((i,n) for i,i_nbrs in enumerate(nbrs) for n in i_nbrs)
-    return nbrs_set
+    pngfile = ('/home/pbradley/csdat/raptcr/'
+               f'yfv_{runtag}_nndists_F{len(fg_files)}_bg{bgnum}.png')
+    plt.savefig(pngfile, dpi=300)
+    print('made:', pngfile)
 
-def get_nonself_nbrs_from_distances_by_radius(D_in, radius):
-    'Returns the set() of all neighbor pairs (i,j), not including i>=j pairs'
-    iis, jjs = np.nonzero(D_in<radius)
-    nbrs_set = set( (i,j) for i,j in zip(iis,jjs) if i<j)
-    return nbrs_set
+    exit()
+
+if 0: # look at nbr counts in YFV data
+    import tcrdist
+    import networkx as nx
+    from scipy.spatial.distance import squareform, pdist
+    import faiss
+
+    aa_mds_dim = 8
+    fg_files = sorted(glob('/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
+                           '*min_count_2.txt.gz'))
+    assert len(fg_files) == 7
 
 
-def compute_gapped_seqs_dists(seqs, force_metric_dim=None):
-    ''' For sanity checking that our gapping procedure gives distances that
-    are consistent with tcrdist
-    '''
-    assert all(len(x) == len(seqs[0]) for x in seqs) # fixed-len
+    #fg_files = fg_files[-1:]
 
-    dm = np.zeros((21,21))
-    dm[:20,:20] = TCRDIST_DM
-    dm[:20,20] = 4.
-    dm[20,:20] = 4.
+    #fg_files = fg_files[-2:]
+    #fg_files = fg_files[:1]
+    #fg_files = fg_files[:5]
 
-    if force_metric_dim is not None:
-        vecs, stress = calc_mds_vecs(dm, force_metric_dim, return_stress=True)
-        new_dm = squareform(pdist(vecs))
-        avg_error = np.mean((dm-new_dm)**2)
-        print(f'compute_gapped_seqs_dists force_metric_dim= {force_metric_dim} '
-              f'stress= {stress:.6f} avg_error: {avg_error:.6f}')
-        dm = new_dm
+    # read expanding clones
+    xclones = pd.read_table(
+        '/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/yfv_expanded_clones.tsv')
+    xclones.rename(columns={
+        'CDR3.nucleotide.sequence':'cdr3nt',
+        'bestVGene':'v',
+        'bestJGene':'j',
+        'CDR3.amino.acid.sequence':'cdr3aa',
+        }, inplace=True)
+    xclones['v'] = xclones.v+'*01'
+    xclones['j'] = xclones.j+'*01'
+    xclones['cdr3nt'] = xclones.cdr3nt.str.lower()
+    v_column, j_column, cdr3_column, organism, chain = 'v','j','cdr3aa','human','B'
+    xclones = filter_out_bad_genes_and_cdr3s(
+        xclones, v_column, cdr3_column, organism, chain, j_column=j_column)
+    print('num_xclones:', xclones.shape[0])
+    tcrdister = tcrdist.tcr_distances.TcrDistCalculator('human')
+    # aa_mds_dim = 8
+    # xvecs = gapped_encode_tcr_chains(
+    #     xclones, organism, chain, aa_mds_dim, v_column=v_column,
+    #     cdr3_column=cdr3_column).astype(np.float32)
 
-    aa2index = {aa:i for i,aa in enumerate(AALPHABET+GAPCHAR)}
+    #exit()
 
-    D = np.zeros((len(seqs), len(seqs)))
 
-    for i,a in enumerate(seqs):
-        for j,b in enumerate(seqs):
+    radius = 24.5
+    bgnum = 4
+    max_evalue = 0.1
+    num_lines = 50
+    target_bg_nbrs = None
+
+    nplots = 3*len(fg_files)
+    nrows = max(1, int(0.8*np.sqrt(nplots)))
+    ncols = (nplots-1)//nrows + 1
+    print(nrows, ncols, fg_files)
+    plt.figure(figsize=(ncols*3, nrows*3))
+    pngfile = ('/home/pbradley/csdat/raptcr/'
+               f'yfv_run9_pvals_F{len(fg_files)}_{radius:.1f}_bg{bgnum}_'
+               f'tbn{target_bg_nbrs}.png')
+
+    run9prefix = '/home/pbradley/csdat/raptcr/slurm/run9/run9'
+    run10prefix = '/home/pbradley/csdat/raptcr/slurm/run10/run10'
+    run4prefix = '/home/pbradley/csdat/raptcr/slurm/run4/run4'
+
+    # read the rep sizes
+    print('reading all rep sizes')
+    files = glob(f'{run4prefix}_A*_{radius:.1f}_r0_fg_nbr_counts.npy')
+    all_rep_sizes = {}
+    for fname in files:
+        ftag = fname.split('_')[-6]
+        counts = np.load(fname)
+        all_rep_sizes[ftag] = counts.shape[0]
+    print('DONE reading all rep sizes')
+
+    for plotno, fg_file in enumerate(fg_files):
+        fg_tag = fg_file.split('/')[-1][:-3]
+        tcrs = read_britanova_tcrs(fg_file)
+
+        my_counts_files = glob(f'{run9prefix}_{fg_tag}_{radius:.1f}_*npy')
+        print(fg_tag, 'numfiles:', len(my_counts_files))
+        if len(my_counts_files)<70:
+            continue
+        assert len(my_counts_files) == 70
+
+        # read fg counts
+        fg_counts = np.load(f'{run9prefix}_{fg_tag}_{radius:.1f}_r0_fg_nbr_counts.npy')
+        num_tcrs = fg_counts.shape[0]
+        assert num_tcrs == tcrs.shape[0]
+
+        # read bg counts, compute pvals
+        all_bg_counts = {}
+        for bg in range(6):
+            print('reading bg counts:', bg)
+            bg_counts = np.zeros((num_tcrs,))
+            for r in range(10):
+                bg_counts += np.load(f'{run9prefix}_{fg_tag}_{radius:.1f}_r{r}_bg_'
+                                     f'{bg}_nbr_counts.npy')
+            all_bg_counts[bg] = bg_counts
+
+        bg_counts = all_bg_counts[bgnum]
+        num_bg_tcrs = 10*num_tcrs
+
+
+        min_fg_bg_nbr_ratio = 2. # actually these are the function defaults
+        max_fg_bg_nbr_ratio = 100
+        pvals = compute_nbr_count_pvalues(
+            fg_counts, bg_counts, num_bg_tcrs,
+            min_fg_bg_nbr_ratio=min_fg_bg_nbr_ratio,
+            max_fg_bg_nbr_ratio=max_fg_bg_nbr_ratio,
+            target_bg_nbrs=target_bg_nbrs,
+        )
+        #if 2:
+        #    print('using rescaled evalues!')
+        #    pvals['evalue'] = pvals.rescaled_evalue
+        pvals = pvals.join(tcrs['count v j cdr3nt cdr3aa'.split()].reset_index(),
+                           on='tcr_index')
+        pvals = pvals.sort_values('evalue').drop_duplicates(['v','j','cdr3aa'])
+        pvals = pvals[pvals.evalue<= max_evalue]
+
+
+        donor = fg_tag[:2] ; assert donor in 'P1 P2 Q1 Q2 S1 S2'.split()
+        xclone_dists = calc_tcrdist_matrix(pvals, xclones[xclones.donor==donor],
+                                           tcrdister)
+
+        #read nbr counts in other britanova reps
+        fgfiles = glob(f'{run10prefix}_{fg_tag}_{radius:.1f}_'
+                       'bg_A5-*.txt_nbr_counts.npy')
+
+        all_fg_counts = {}
+        for fname in fgfiles:
+            other_ftag = fname.split('_')[-3]
+            all_fg_counts[other_ftag] = np.load(fname)
+
+
+        print('='*80)
+        for ii, l in enumerate(pvals.head(num_lines).itertuples()):
+            ind = l.tcr_index
+            #tcr = tcrs.iloc[ind]
+            mindist = int(min(xclone_dists[ii,:]))
+            same_tcr_mask = (tcrs.v==l.v)&(tcrs.j==l.j)&(tcrs.cdr3aa==l.cdr3aa)
+            num_clones = same_tcr_mask.sum()
+            num_cells = sum(tcrs[same_tcr_mask]['count'])
+            obs = fg_counts[ind]
+            msg= f'eval: {l.evalue:9.2e} {obs:3d} {l.expected_nbrs:5.1f} bg%'
+            for bg in range(6):
+                expect = all_bg_counts[bg][ind] / 10.
+                msg += f' {100*expect/obs:3.0f}'
+            msg += ' fg%'
+            for other_ftag in sorted(all_fg_counts.keys()):
+                expect = ((all_fg_counts[other_ftag][ind]-(fg_tag==other_ftag)) *
+                          num_tcrs / all_rep_sizes[other_ftag])
+                msg += f' {100*expect/obs:3.0f}'
+            msg += (f' {fg_tag} {mindist:3d} {num_clones:2d} {num_cells:4d} '
+                    f'{l.v} {l.j} {l.cdr3aa}')
+            print(msg)
+
+
+
+        # plotting ###
+        plt.subplot(nrows, ncols, 3*plotno+1)
+        plt.title(f'{fg_tag[:9]} N={num_tcrs} R={radius:.1f} {pvals.shape[0]}',
+                  fontsize=7)
+        #bg_scale = num_bg_tcrs/num_tcrs
+        xvals = np.log10(1+pvals.expected_nbrs)
+        yvals = -1*np.log10(pvals.evalue)
+        cvals = np.log10(pvals.fg_bg_nbr_ratio)
+
+        plt.scatter(xvals, yvals, c=cvals,
+                    vmin=np.log10(min_fg_bg_nbr_ratio),
+                    vmax=np.log10(max_fg_bg_nbr_ratio))
+        #plt.xlim((-0.025, plt.xlim()[1]))
+        locs,_ = plt.xticks()
+        labs = [f'{10**x - 1:.1f}' for x in locs]
+        mn,mx = plt.xlim()
+        plt.xticks(locs,labs)
+        plt.xlim((mn,mx)) # dunno why we need this?!?
+        mn,mx = plt.ylim()
+        plt.ylim((-0.1, max(mx,15.)))
+
+
+        ## draw a graph of the significant tcrs with edges between tcrs whose
+        ## distance is less than radius
+        goodvecs = gapped_encode_tcr_chains(
+            pvals, organism, chain, aa_mds_dim=aa_mds_dim, v_column=v_column,
+            cdr3_column=cdr3_column).astype(np.float32)
+        idx = faiss.IndexFlatL2(goodvecs.shape[1])
+        idx.add(goodvecs)
+        start = timer()
+        lims,D,I = idx.range_search(goodvecs, radius)
+
+        dists = squareform(pdist(goodvecs))**2
+
+        nbrlist = list(zip(*np.nonzero(dists<=radius)))
+        print('nbrs:', len(nbrlist), len(D))
+        g = nx.Graph()
+        for i in range(pvals.shape[0]):
+            g.add_node(i)
+        for i,j in nbrlist:
             if i<j:
-                dist = sum(dm[aa2index[x],aa2index[y]]
-                           for x,y in zip(a,b))
-                D[i,j] = dist
-                D[j,i] = dist
-    return D
+                g.add_edge(i,j)
+
+        comps = list(nx.connected_components(g))
+        print('num comps:', len(comps))
+        labels = {x:'' for x in range(pvals.shape[0])}
+
+        for comp in comps:
+            evalue, irep = min((pvals.iloc[x]['evalue'],x) for x in comp)
+            #print(len(comp), nndist, rep)
+            rep = pvals.iloc[irep]
+            labels[irep] = f'{rep.v} {rep.cdr3aa}'
 
 
-def filter_out_bad_genes_and_cdr3s(
-        df,
-        v_column,
-        cdr3_column,
-        organism,
-        chain,
-        min_cdr3_len = 6,
-        j_column=None,
-):
-    ''' returns filtered copy of df
+        k = 2/np.sqrt(pvals.shape[0]) # default is 1/sqrt(N)
+        pos = nx.drawing.layout.spring_layout(g, k=k)
 
-    removes tcrs with
+        plt.subplot(nrows, ncols, 3*plotno+2)
+        plt.title('color by evalue')
+        colors = [-1*np.log10(pvals.iloc[x]['evalue']) for x in list(g)]
+        nx.draw_networkx(g, pos, ax=plt.gca(), node_size=10, with_labels=False,
+                         # labels=labels,
+                         node_color=colors)#, vmin=0, vmax = 48)
 
-    * unrecognized V gene names (and J genes, if j_column != None)
-    * V genes whos cdr1/cdr2/cdr2.5 contain '*' (probably pseudogenes?)
-    * CDR3s with non-AA characters or shorter than 6
-    '''
-    all_genes_df = pd.read_table(DATADIR+'phil/combo_xcr.tsv')
-    all_genes_df = all_genes_df[(all_genes_df.organism==organism)&
-                                (all_genes_df.chain==chain)]
-    # drop cdr3, since a '*' there might be trimmed back so it's OK...
-    all_genes_df['cdrs'] = all_genes_df.cdrs.str.split(';').str.slice(0,3).str.join(';')
-
-    known_v_genes = set(all_genes_df[all_genes_df.region=='V'].id)
-    bad_v_genes = set(x.id for x in all_genes_df.itertuples()
-                      if x.region == 'V' and '*' in x.cdrs)
-    print('bad_v_genes:', len(bad_v_genes), bad_v_genes)
-
-    good_cdr3s_mask = np.array(
-        [len(cdr3)>=min_cdr3_len and all(aa in AALPHABET for aa in cdr3)
-         for cdr3 in df[cdr3_column]])
-    print('bad_cdr3s in df:', (~good_cdr3s_mask).sum())
-
-    bad_v_genes_mask = df[v_column].isin(bad_v_genes)
-    print('bad_v_genes in df:', bad_v_genes_mask.sum(),
-          df[bad_v_genes_mask][v_column].unique())
-
-    unknown_genes_mask = ~df[v_column].isin(known_v_genes)
-    print('unknown_genes in df:', unknown_genes_mask.sum(),
-          df[unknown_genes_mask][v_column].unique())
-    if j_column is not None:
-        known_j_genes = set(all_genes_df[all_genes_df.region=='J'].id)
-        unknown_j_genes_mask = ~df[j_column].isin(known_j_genes)
-        print('unknown_j_genes in df:', unknown_j_genes_mask.sum(),
-              df[unknown_j_genes_mask][j_column].unique())
-        unknown_genes_mask |= unknown_j_genes_mask
+        plt.subplot(nrows, ncols, 3*plotno+3)
+        plt.title('color by mindist to expanding clone')
+        min_xclonedists = xclone_dists.min(axis=1)
+        assert min_xclonedists.shape == (pvals.shape[0],)
+        colors = [min_xclonedists[x] for x in list(g)]
+        nx.draw_networkx(g, pos, ax=plt.gca(), node_size=10, with_labels=False,
+                         # labels=labels,
+                         node_color=colors, vmin=0, vmax = 48)
 
 
-    return df[good_cdr3s_mask & (~bad_v_genes_mask) & (~unknown_genes_mask)].copy()
+
+        #run5_A3-i107.txt_6.5_bg_A5-S11.txt_nbr_counts.npy
+    plt.tight_layout()
+    plt.savefig(pngfile, dpi=100)
+    print('made:', pngfile)
+
+    exit()
 
 
-def parse_repertoire(
-        df,
-        organism,
-        chain,
-        v_column,
-        j_column,
-        cdr3_column,
-        extend_align=0,
-):
-    ''' Returns new dataframe with info on where the V/J regions of the
-    cdr3 amino acid sequence end/begin
+if 0: # look at nbr counts in the britanova set
+    #old_ftags = get_original_18_ftags()
+    #print(old_ftags)
+    #exit()
 
-    columns of new dataframe: ['v', 'j', 'cdr3', 'v_part', 'ndn_part', 'j_part']
+    britdir = DATADIR+'phil/britanova/'
+    metadata = pd.read_table(britdir+'metadata.txt')
 
-    v_part is the part of the CDR3 that aligns with the V gene AA sequence
-    j_part is the part of the CDR3 that aligns with the J gene AA sequence
-    ndn_part is everything else (the middle; might be the empty string)
+    fg_files = sorted(glob(britdir+'A*.txt.gz'))
+    assert len(fg_files) == metadata.shape[0]
 
-    '''
-    all_genes_df = pd.read_table(DATADIR+'phil/combo_xcr.tsv')
-    all_genes_df = all_genes_df[(all_genes_df.organism==organism)&
-                                (all_genes_df.chain==chain)]
+    fg_files = sorted(
+        [britdir+x.file_name+'.gz' for x in metadata.itertuples() if x.age==0])
 
-    all_genes_df['cdr3'] = all_genes_df.cdrs.str.split(';').str.get(-1).str.replace(
-        '.','',regex=False)
+    fg_files = get_original_18_fnames()
 
-    v_df = all_genes_df[all_genes_df.region=='V'].set_index('id')['cdr3']
-    j_df = all_genes_df[all_genes_df.region=='J'].set_index('id')['cdr3']
+    #fg_files = fg_files[-1:]
 
-    assert all(x in j_df.index for x in df[j_column])
+    #fg_files = fg_files[-2:]
+    #fg_files = fg_files[:1]
+    #fg_files = fg_files[:5]
 
-    dfl = []
-    for ind,v,j,cdr3 in df[[v_column,j_column,cdr3_column]].itertuples(name=None):
-        v_cdr3 = v_df[v]
-        j_cdr3 = j_df[j]
+    radius = 12.5
+    bgnum = 4
+    max_evalue = 0.1
+    num_lines = 50
+    target_bg_nbrs = None
 
-        v_idents = 0
-        for a,b in zip(v_cdr3, cdr3):
-            if a!=b:
-                break
-            else:
-                v_idents += 1
+    nrows = max(1, int(0.75*np.sqrt(len(fg_files))))
+    ncols = (len(fg_files)-1)//nrows + 1
+    print(nrows, ncols, fg_files)
+    plt.figure(figsize=(ncols*3, nrows*3))
+    pngfile = ('/home/pbradley/csdat/raptcr/'
+               f'run4run5_pvals_F{len(fg_files)}_{radius:.1f}_bg{bgnum}_'
+               f'tbn{target_bg_nbrs}.png')
 
-        j_idents = 0
-        for a,b in zip(reversed(j_cdr3), reversed(cdr3)):
-            if a!=b:
-                break
-            else:
-                j_idents += 1
+    run4prefix = '/home/pbradley/csdat/raptcr/slurm/run4/run4'
+    run5prefix = '/home/pbradley/csdat/raptcr/slurm/run5/run5'
+    run8prefix = '/home/pbradley/csdat/raptcr/slurm/run8/run8'
 
-        v_idents += extend_align
-        j_idents += extend_align
+    # read the rep sizes
+    print('reading all rep sizes')
+    files = glob(f'{run4prefix}_A*_{radius:.1f}_r0_fg_nbr_counts.npy')
+    all_rep_sizes = {}
+    for fname in files:
+        ftag = fname.split('_')[-6]
+        counts = np.load(fname)
+        all_rep_sizes[ftag] = counts.shape[0]
+    print('DONE reading all rep sizes')
 
-        overlap = v_idents+j_idents - len(cdr3)
-        if overlap>0:
-            v_idents -= overlap//2
-            j_idents -= (overlap - overlap//2)
+    for plotno, fg_file in enumerate(fg_files):
+        fg_tag = fg_file.split('/')[-1][:-3]
+        tcrs = read_britanova_tcrs(fg_file)
 
-        prefix = cdr3[:v_idents]
-        middle = cdr3[v_idents:len(cdr3)-j_idents]
-        suffix = cdr3[len(cdr3)-j_idents:]
+        # read fg counts
+        fg_counts = np.load(f'{run4prefix}_{fg_tag}_{radius:.1f}_r0_fg_nbr_counts.npy')
+        num_tcrs = fg_counts.shape[0]
+        assert num_tcrs == tcrs.shape[0]
+        assert num_tcrs == all_rep_sizes[fg_tag]
 
-        assert prefix+middle+suffix == cdr3
-        if ind%25000==0:
-            print(f'{prefix:7s} {middle:12s} {suffix:12s} {cdr3} {v_cdr3} {j_cdr3}',
-                  ind, df.shape[0])
+        # read bg counts, compute pvals
+        all_bg_counts = {}
+        for bg in range(6):
+            print('reading bg counts:', bg)
+            bg_counts = np.zeros((num_tcrs,))
+            for r in range(10):
+                prefix = run8prefix if bg==5 else run4prefix
+                bg_counts += np.load(f'{prefix}_{fg_tag}_{radius:.1f}_r{r}_bg_'
+                                     f'{bg}_nbr_counts.npy')
+            all_bg_counts[bg] = bg_counts
 
-        dfl.append(dict(
-            v=v,
-            j=j,
-            cdr3=cdr3,
-            v_part=prefix,
-            ndn_part=middle,
-            j_part=suffix,
-        ))
-
-    parsed_df = pd.DataFrame(dfl)
-
-    return parsed_df
+        bg_counts = all_bg_counts[bgnum]
+        num_bg_tcrs = 10*num_tcrs
 
 
-def resample_parsed_repertoire(
-        parsed_df,
-        num=None,
-        match_j_families=False, # require ndn_part and j_part to have same j fam
-        verbose=False,
-):
-    ''' Build a new random repertoire by mixing and matching cdr3 pieces
-    from a parsed repertoire.
+        min_fg_bg_nbr_ratio = 2. # actually these are the function defaults
+        max_fg_bg_nbr_ratio = 100
+        pvals = compute_nbr_count_pvalues(
+            fg_counts, bg_counts, num_bg_tcrs,
+            min_fg_bg_nbr_ratio=min_fg_bg_nbr_ratio,
+            max_fg_bg_nbr_ratio=max_fg_bg_nbr_ratio,
+            target_bg_nbrs=target_bg_nbrs,
+        )
+        if 2:
+            print('using rescaled evalues!')
+            pvals['evalue'] = pvals.rescaled_evalue
+        pvals = pvals.join(tcrs['count v j cdr3nt cdr3aa'.split()].reset_index(),
+                           on='tcr_index')
+        pvals = pvals.sort_values('evalue').drop_duplicates(['v','j','cdr3aa'])
+        pvals = pvals[pvals.evalue<= max_evalue]
 
-    match the CDR3 length distributions
-    '''
-    if num is None:
-        num = parsed_df.shape[0]
-    # TODO: right now this only works if resampling the same number of tcrs,
-    #   because of cdr3-length-distribution-matching
-    assert num == parsed_df.shape[0]
+        # read nbr counts in other britanova reps
+        fgfiles = glob(f'{run5prefix}_{fg_tag}_{radius:.1f}_'
+                       'bg_A5-*.txt_nbr_counts.npy')
 
-    old_counts = Counter(parsed_df.cdr3.str.len())
-    new_counts = Counter() # the new cdr3 len counts
+        all_fg_counts = {}
+        for fname in fgfiles:
+            other_ftag = fname.split('_')[-3]
+            all_fg_counts[other_ftag] = np.load(fname)
 
-    dfl = []
-    skipcount = 0 # diagnostics
 
-    while len(dfl)<num:
-        replace = num>parsed_df.shape[0]
-        v_parts = parsed_df.sample(num, replace=replace)
-        d_parts = parsed_df.sample(num, replace=replace)
-        j_parts = parsed_df.sample(num, replace=replace)
+        print('='*80)
+        for l in pvals.head(num_lines).itertuples():
+            ind = l.tcr_index
+            #tcr = tcrs.iloc[ind]
+            same_tcr_mask = (tcrs.v==l.v)&(tcrs.j==l.j)&(tcrs.cdr3aa==l.cdr3aa)
+            num_clones = same_tcr_mask.sum()
+            num_cells = sum(tcrs[same_tcr_mask]['count'])
+            obs = fg_counts[ind]
+            msg= f'eval: {l.evalue:9.2e} {obs:3d} {l.expected_nbrs:5.1f} bg% '
+            for bg in range(6):
+                expect = all_bg_counts[bg][ind] / 10.
+                msg += f' {100*expect/obs:3.0f}'
+            msg += '  fg% '
+            for other_ftag in sorted(all_fg_counts.keys()):
+                #if other_ftag == fg_tag:
+                #    continue
+                expect = ((all_fg_counts[other_ftag][ind]-(fg_tag==other_ftag)) *
+                          all_rep_sizes[fg_tag] / all_rep_sizes[other_ftag])
+                msg += f' {100*expect/obs:3.0f}'
+            msg += f'  {fg_tag} {num_clones:2d} {num_cells:4d} {l.v} {l.j} {l.cdr3aa}'
+            print(msg)
 
-        for vrow, drow, jrow in zip(v_parts.itertuples(),
-                                    d_parts.itertuples(),
-                                    j_parts.itertuples()):
-            counter= vrow.Index
-            if verbose and counter%10000==0:
-                print(counter, len(dfl), skipcount)
-            v = vrow.v
-            j = jrow.j
-            if match_j_families and j[2] == 'B':
-                assert j.startswith('TRBJ') and j[5] == '-'
-                j_jfam = int(jrow.j[4])
-                d_jfam = int(drow.j[4])
-                assert j_jfam in [1,2] and d_jfam in [1,2]
-                if j_jfam != d_jfam:
-                    skipcount += 1
-                    continue
 
-            cdr3 = vrow.v_part + drow.ndn_part + jrow.j_part
-            l = len(cdr3)
-            if new_counts[l] < old_counts[l]:
-                dfl.append(dict(v=v, j=j, cdr3=cdr3))
-                new_counts[l] += 1
 
-                if len(dfl) >= num:
-                    break
-            else:
-                skipcount += 1
+        # plotting ###
+        plt.subplot(nrows, ncols, plotno+1)
+        plt.title(f'{fg_tag} N={num_tcrs} R={radius:.1f} {pvals.shape[0]}',
+                  fontsize=8)
+        #bg_scale = num_bg_tcrs/num_tcrs
+        xvals = np.log10(1+pvals.expected_nbrs)
+        yvals = -1*np.log10(pvals.evalue)
+        cvals = np.log10(pvals.fg_bg_nbr_ratio)
 
-    assert len(dfl) == num
-    if verbose:
-        print('final skipcount:', skipcount)
-    return pd.DataFrame(dfl)
+        plt.scatter(xvals, yvals, c=cvals,
+                    vmin=np.log10(min_fg_bg_nbr_ratio),
+                    vmax=np.log10(max_fg_bg_nbr_ratio))
+        mn,mx = plt.ylim()
+        plt.ylim((-0.1, max(mx,15.)))
+
+
+
+        #run5_A3-i107.txt_6.5_bg_A5-S11.txt_nbr_counts.npy
+    plt.tight_layout()
+    plt.savefig(pngfile, dpi=100)
+    print('made:', pngfile)
+
+    exit()
+
+
+
+if 0: # setup for big cluster calc, brit-vs-brit nbrs
+    # this block generates a file containing commands
+    # those commands get distributed over the cluster
+    #
+    PY = '/home/pbradley/miniconda3/envs/raptcr/bin/python'
+    EXE = '/home/pbradley/gitrepos/immune_response_detection/phil_running.py'
+
+    radii = [3.5, 6.5, 12.5, 18.5, 24.5]
+
+    britdir = DATADIR+'phil/britanova/'
+    yfvdir = '/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
+    df = pd.read_table(britdir+'metadata.txt')
+
+
+    fg_fnames = sorted(glob(yfvdir+'*count_2.txt.gz')) ; assert len(fg_fnames)==7
+    #fg_fnames = [f'{britdir}{x}.gz' for x in df.file_name]
+    bg_fnames = [f'{britdir}{x}.gz' for x,y in zip(df.file_name, df.age) if y==0]
+
+    # fnames = glob('/home/pbradley/gitrepos/immune_response_detection/'
+    #               'data/phil/britanova/A*gz')
+    print(len(fg_fnames), len(bg_fnames))
+
+    runtag = 'run10' ; xargs = ' --max_tcrs 500000 ' # now yfv day15
+    #runtag = 'run7' ; xargs = ' --max_tcrs 500000 ' # now full britanova download
+    #runtag = 'run5' ; xargs = ' --max_tcrs 500000 ' # original set of 18
+
+    rundir = f'/home/pbradley/csdat/raptcr/slurm/{runtag}/'
+    if not exists(rundir):
+        mkdir(rundir)
+
+    cmds_file = f'{rundir}{runtag}_commands.txt'
+    assert not exists(cmds_file)
+    out = open(cmds_file,'w')
+
+    for fname in fg_fnames:
+        ftag = fname.split('/')[-1][:-3]
+        for radius in radii:
+            for bg_fname in bg_fnames:
+                outfile_prefix = f'{rundir}{runtag}_{ftag}_{radius:.1f}'
+                cmd = (f'{PY} {EXE} {xargs} --mode brit_vs_brit '
+                       f' --fg_filename {fname} --radius {radius} '
+                       f' --bg_filenames {bg_fname} '
+                       f' --outfile_prefix {outfile_prefix} '
+                       f' > {outfile_prefix}.log 2> {outfile_prefix}.err')
+                out.write(cmd+'\n')
+    out.close()
+    print('made:', cmds_file)
+
+    exit()
+
+if 0: # setup for big nndists calc on cluster
+    # this block generates a file containing commands
+    # those commands get distributed over the cluster
+    #
+    PY = '/home/pbradley/miniconda3/envs/raptcr/bin/python'
+    EXE = '/home/pbradley/gitrepos/immune_response_detection/phil_running.py'
+
+    num_repeats = 10
+
+    fnames = glob('/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
+                  '*min_count_2.txt.gz')
+    #fnames = glob('/home/pbradley/gitrepos/immune_response_detection/'
+    #              'data/phil/britanova/A*gz')
+    print(len(fnames))
+
+    runtag = 'run12' ; xargs = ' --num_nbrs 25 '
+    #runtag = 'run11' ; xargs = ' --num_nbrs 10 '
+
+    rundir = f'/home/pbradley/csdat/raptcr/slurm/{runtag}/'
+    if not exists(rundir):
+        mkdir(rundir)
+
+    cmds_file = f'{rundir}{runtag}_commands.txt'
+    assert not exists(cmds_file)
+    out = open(cmds_file,'w')
+
+    for fname in fnames:
+        for bgnum in range(6):
+            ftag = fname.split('/')[-1][:-3]
+            for repeat in range(num_repeats):
+                outfile_prefix = f'{rundir}{runtag}_{ftag}_r{repeat}'
+                cmd = (f'{PY} {EXE} {xargs} --mode nndists_vs_bg --bg_nums {bgnum} '
+                       f' --filename {fname} --outfile_prefix {outfile_prefix} '
+                       f' > {outfile_prefix}.log 2> {outfile_prefix}.err')
+                out.write(cmd+'\n')
+    out.close()
+    print('made:', cmds_file)
+
+    exit()
+
 
 
 if 0: # setup for big calc
@@ -447,16 +695,21 @@ if 0: # setup for big calc
     # those commands get distributed over the cluster
     #
     PY = '/home/pbradley/miniconda3/envs/raptcr/bin/python'
-    EXE = '/home/pbradley/gitrepos/immune_response_detection/phil_hacking.py'
+    EXE = '/home/pbradley/gitrepos/immune_response_detection/phil_running.py'
 
     radii = [3.5, 6.5, 12.5, 18.5, 24.5]
     num_repeats = 10
 
-    fnames = glob('/home/pbradley/gitrepos/immune_response_detection/'
-                  'data/phil/britanova/A*gz')
+    fnames = glob('/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
+                  '*min_count_2.txt.gz')
+    #fnames = glob('/home/pbradley/gitrepos/immune_response_detection/'
+    #              'data/phil/britanova/A*gz')
     print(len(fnames))
 
-    runtag = 'run4' ; xargs = ' --max_tcrs 500000 ' # new 5th bg rep
+    runtag = 'run9' ; xargs = ' --max_tcrs 500000 ' # yfv day 15
+    #runtag = 'run8' ; xargs = ' --max_tcrs 500000 --bg_nums 5 ' # new bg model
+    #runtag = 'run6' ; xargs = ' --max_tcrs 500000 ' # new repertoires
+    #runtag = 'run4' ; xargs = ' --max_tcrs 500000 ' # new 5th bg rep
     #runtag = 'run3' ; xargs = ' --max_tcrs 500000 '
     #runtag = 'run2' ; xargs = ' --aa_mds_dim 16 --max_tcrs 100000 '
     #runtag = 'run1' ; xargs = ' --max_tcrs 100000 '
@@ -474,7 +727,8 @@ if 0: # setup for big calc
         for radius in radii:
             for repeat in range(num_repeats):
                 outfile_prefix = f'{rundir}{runtag}_{ftag}_{radius:.1f}_r{repeat}'
-                cmd = (f'{PY} {EXE} {xargs} --filename {fname} --radius {radius} '
+                cmd = (f'{PY} {EXE} {xargs} --mode brit_vs_bg '
+                       f' --filename {fname} --radius {radius} '
                        f' --outfile_prefix {outfile_prefix} '
                        f' > {outfile_prefix}.log 2> {outfile_prefix}.err')
                 out.write(cmd+'\n')
@@ -484,109 +738,6 @@ if 0: # setup for big calc
     exit()
 
 
-
-if MAIN: # try some range searching against various simple background repertoires
-    # this block gets called by the commands in the listfile generated above
-    import faiss
-    import argparse
-    import tcrdist
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--radius', type=float, required=True)
-    parser.add_argument('--filename', required=True)
-    parser.add_argument('--outfile_prefix', required=True)
-    parser.add_argument('--max_tcrs', type=int)
-    parser.add_argument('--aa_mds_dim', type=int, default=8)
-    args = parser.parse_args()
-
-
-    # load data from the Britanova aging study; I downloaded the files from:
-    # https://zenodo.org/record/826447#.Y-7Ku-zMIWo
-    #
-    print('reading:', args.filename)
-
-    tcrs = pd.read_table(args.filename)
-    if args.max_tcrs is not None:
-        tcrs = tcrs.head(args.max_tcrs)
-
-    tcrs['v'] = tcrs.v+'*01'
-    tcrs['j'] = tcrs.j+'*01'
-
-    # remove singletons
-    tcrs = tcrs[tcrs['count']>1]
-
-    # filter bad genes/cdr3s
-    v_column, j_column, cdr3_column, organism, chain = 'v','j','cdr3aa','human','B'
-    tcrs = filter_out_bad_genes_and_cdr3s(
-        tcrs, v_column, cdr3_column, organism, chain, j_column=j_column)
-    print('num_tcrs:', tcrs.shape[0], args.filename)
-
-    # encode the tcrs
-    vecs = gapped_encode_tcr_chains(
-        tcrs, organism, chain, args.aa_mds_dim, v_column=v_column,
-        cdr3_column=cdr3_column).astype(np.float32)
-
-
-    # parse repertoire, create background reps
-    parsed_df = parse_repertoire(
-        tcrs, organism, chain, v_column, j_column, cdr3_column)
-    parsed_df_x1 = parse_repertoire(
-        tcrs, organism, chain, v_column, j_column, cdr3_column, extend_align=1)
-
-    tcrs['cdr3nt'] = tcrs.cdr3nt.str.lower()
-    tcr_tuples = [(None,x) for x in tcrs['v j cdr3aa cdr3nt'.split()].itertuples(
-        name=None, index=None)]
-    junctions = tcrdist.tcr_sampler.parse_tcr_junctions(organism, tcr_tuples)
-
-    # fg radius search:
-    idx = faiss.IndexFlatL2(vecs.shape[1])
-    idx.add(vecs)
-    start = timer()
-    lims,D,I = idx.range_search(vecs, args.radius)
-    print(f'fg range_search took {timer()-start:.2f} secs', len(vecs))
-    nbr_counts = lims[1:]-lims[:-1] - 1 # exclude self
-
-    outfile = f'{args.outfile_prefix}_fg_nbr_counts.npy'
-    np.save(outfile, nbr_counts)
-    print('made:', outfile, flush=True)
-
-
-    for bgnum in reversed(range(5)):
-        if bgnum==0:
-            bg_tcrs = resample_parsed_repertoire(parsed_df)
-        elif bgnum==1:
-            bg_tcrs = resample_parsed_repertoire(parsed_df_x1)
-        elif bgnum==2:
-            bg_tcrs = resample_parsed_repertoire(
-                parsed_df, match_j_families=True)
-        elif bgnum==3:
-            bg_tcrs = resample_parsed_repertoire(
-                parsed_df_x1, match_j_families=True)
-        elif bgnum==4:
-            bg_tcr_tuples = tcrdist.tcr_sampler.resample_shuffled_tcr_chains(
-                organism, tcrs.shape[0], chain, junctions)
-            bg_tcrs = pd.DataFrame([dict(v=x[0], cdr3=x[2]) for x in bg_tcr_tuples])
-
-        bg_tcrs.rename(columns={'v':v_column, 'cdr3':cdr3_column},
-                       inplace=True)
-
-        bg_vecs = gapped_encode_tcr_chains(
-            bg_tcrs, organism, chain, args.aa_mds_dim, v_column=v_column,
-            cdr3_column=cdr3_column).astype(np.float32)
-
-        idx = faiss.IndexFlatL2(bg_vecs.shape[1])
-        idx.add(bg_vecs)
-        start = timer()
-        lims,D,I = idx.range_search(vecs, args.radius)
-        print(f'bg range_search took {timer()-start:.2f} secs', len(vecs))
-        bg_nbr_counts = lims[1:]-lims[:-1]
-
-        outfile = f'{args.outfile_prefix}_bg_{bgnum}_nbr_counts.npy'
-        np.save(outfile, bg_nbr_counts)
-        print('made:', outfile)
-
-
-    exit()
 
 
 
