@@ -376,7 +376,7 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
             return np.array([self.transform(s) for s in X]).astype(np.float32)
         elif isinstance(X, pd.DataFrame):
             if self.full_tcr:
-                assert 'v_call' in X.columns, f"DataFrame does not include column named 'v_gene'."
+                assert 'v_call' in X.columns, f"DataFrame does not include column named 'v_call'."
                 assert 'junction_aa' in X.columns, f"DataFrame does not include column named 'junction_aa'."
                 return self._gapped_encode_tcr_chains(X)
             else:
