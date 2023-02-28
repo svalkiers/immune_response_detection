@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import parmap
+import time
 
 from scipy.stats import hypergeom
 from multiprocessing import Pool, cpu_count
@@ -33,8 +34,10 @@ def find_neighbors_within_radius(query, dataset, hasher:Cdr3Hasher, r:Union[floa
     '''
     
     # Set up the index
+    t0 = time.time()
     index = IvfIndex(hasher=hasher, n_centroids=k, n_probe=p)
     index.add(dataset)
+    print(f'Time elapsed building index: {np.round(time.time()-t0, 2)} s.')
 
     # if ncpus > 1:
     #     '''
@@ -59,20 +62,23 @@ def find_neighbors_within_radius(query, dataset, hasher:Cdr3Hasher, r:Union[floa
     # else:
 
     if isinstance(query, list):
+        t0 = time.time()
         counts = [nneighbors(seq=seq, index=index, r=r, exclude_self=True) for seq in query]
-    # THIS PART NEEDS TO BE REWORKED AS TO NOT ALWAYS CONSTRUCT A DATAFRAME STRUCTURE
-    # SLOW!!!
+        print(f'Time elapsed finding neighbors: {time.time()-t0} s.')
+        return dict(counts)
     elif isinstance(query, pd.DataFrame):
-        counts = [nneighbors(seq=pd.DataFrame(seq[1]).T, index=index, r=r, exclude_self=True) for seq in query.iterrows()]
-
-    return dict(counts)
+        counts = index.array_search(query=query, r=r, exclude_self=True)
+        return counts.source.value_counts().to_dict()
+        # counts = [nneighbors(seq=pd.DataFrame(seq[1]).T, index=index, r=r, exclude_self=True) for seq in query.iterrows()]
 
 class NeighborEnrichment():
     def __init__(
         self,
         repertoire:Union[TcrCollection, pd.DataFrame, list],
         hasher:Union[Cdr3Hasher, TCRDistEncoder],
-        radius=.1,
+        radius:Union[int,float]=12.5,
+        n_centroids:int=1000,
+        n_probe:int=50,
         custom_background=None,
         ncpus:int=1
         ):
@@ -81,6 +87,8 @@ class NeighborEnrichment():
         self.background = custom_background
         self.hasher = hasher
         self.rsize = len(repertoire)
+        self.n_centroids = n_centroids
+        self.n_probe = n_probe
         self.r = radius
 
         if ncpus == -1: # if set to -1, use all CPUs
@@ -96,7 +104,14 @@ class NeighborEnrichment():
             self.background = sample_cdr3s(n)
 
     def find_foreground_neighbors(self, eliminate_singlets:bool=True):
-        fg = find_neighbors_within_radius(query=self.repertoire, dataset=self.repertoire, hasher=self.hasher, r=self.r)
+        fg = find_neighbors_within_radius(
+            query=self.repertoire, 
+            dataset=self.repertoire, 
+            hasher=self.hasher, 
+            r=self.r,
+            k=self.n_centroids,
+            p=self.n_probe
+            )
         if eliminate_singlets:
             return {i:fg[i] for i in fg if fg[i] > 0}
         else:
@@ -120,20 +135,25 @@ class NeighborEnrichment():
         pvals = [hypergeom.sf(i, M, n, i+j) for i,j in zip(n_f,n_b)]
         return pd.DataFrame({'sequence':q, 'fg_n':n_f, 'bg_n':n_b, 'pvalue':pvals})
 
-    def adaptive_sampling(self, depth=1e6):
+    def adaptive_sampling(self, depth=1e6, regime=None):
         '''
         Iteratively sample deeper into the background and eliminate
         TCRs that do not satisfy the significance cut-off.
         '''
         # Find neighbors in foreground repertoire
+        print('Computing neighbours in query repertoire...')
         nf = self.find_foreground_neighbors()
-        sampling_regime = [1e5, 2e5, 5e5, 1e6, depth]
+        if regime is None:
+            sampling_regime = [1e5, 2e5, 5e5, 1e6, depth]
+        else:
+            sampling_regime = regime
         for n in sampling_regime:
+            print(f'Sampling at depth: {n}')
             if n > depth:
                 break
             else:
                 self._background(int(n))
             sign = self.neighbor_significance(nf)
             filtered = sign[(sign.bg_n == 0) | (sign.pvalue < 0.05)]
-            nf = {i:j for i,j in zip(sign.sequence,sign.fg_n)}
+            nf = {i:j for i,j in zip(filtered.sequence,filtered.fg_n)}
         return sign

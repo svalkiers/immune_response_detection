@@ -102,7 +102,7 @@ class BaseIndex(ABC):
         else:
             return [(self.ids[i],d) for (i,d) in zip(I,D)]
 
-    def radius_search(self, query:str, r:float, exclude_self=True):
+    def radius_search(self, query:Union[str,list,pd.DataFrame], r:float, exclude_self=True):
         """
         ONLY COMPATIBLE WITH THE FOLLOWING INDEX STRUCTURES:
         - IndexFlat
@@ -113,8 +113,8 @@ class BaseIndex(ABC):
 
         Parameters
         ----------
-        query : str
-            TCR sequence set as the centroid around which to query.
+        query
+            TCR sequence(s) set as the centroid around which to query.
         r : float
             Radius.
         """
@@ -122,9 +122,61 @@ class BaseIndex(ABC):
         lims, D, I = self._within_radius(x=q, r=r)
         return self._report_radius(I, D, exclude_self=exclude_self)
 
+    def radius_search_list(self, query, r):
+        xq = self.hasher.transform(query).astype(np.float32)
+        lims, D, I = self.idx.range_search(x=xq, thresh=r)
+        result = []
+        n = 0
+        for i,j in enumerate(query):
+            nn = lims[i+1]-lims[i]
+            nbr_ids = I[int(n):int(n+nn)]
+            dist = D[int(n):int(n+nn)]
+            n += nn
+            # clone_id = '_'.join(query.loc[j][['v_call', 'junction_aa']])
+            nbrs = [self.ids[j] for j in nbr_ids]
+            result[clone_id] = (nbrs,dist)
+            
+            # nbr_df = pd.DataFrame({'target':nbrs,'distance':dist}).sort_values(by='distance')
+            # nbr_df['source'] = clone_id
+            # result.append(nbr_df)
+
+        # col_order = ['source', 'target', 'distance']
+        # result = pd.concat(result)
+        # result = result[col_order]
+        # Remove any self-sequences that are identical to the query sequence
+        # if exclude_self:
+            # return result[result.distance > 0]
+        return result
+
+    def array_search(self, query:pd.DataFrame, r:Union[float,int], exclude_self=False):
+        xq = self.hasher.transform(query).astype(np.float32)
+        lims, D, I = self.idx.range_search(x=xq, thresh=r)
+        result = []
+        n = 0
+        for i,j in enumerate(query.index):
+            nn = lims[i+1]-lims[i]
+            nbr_ids = I[int(n):int(n+nn)]
+            dist = D[int(n):int(n+nn)]
+            n += nn
+            clone_id = '_'.join(query.loc[j][['v_call', 'junction_aa']])
+            nbrs = [self.ids[j] for j in nbr_ids]
+            # result[clone_id] = (nbrs,dist)
+            
+            nbr_df = pd.DataFrame({'target':nbrs,'distance':dist}).sort_values(by='distance')
+            nbr_df['source'] = clone_id
+            result.append(nbr_df)
+
+        col_order = ['source', 'target', 'distance']
+        result = pd.concat(result)
+        result = result[col_order]
+        # Remove any self-sequences that are identical to the query sequence
+        if exclude_self:
+            return result[result.distance > 0]
+        return result
+
 class FlatIndex(BaseIndex):
     """
-    Exact search for euclidean hash distance.
+    Exact search for euclidean hash disstrtance.
     """
 
     def __init__(self, hasher: Cdr3Hasher) -> None:
