@@ -19,7 +19,7 @@ def nneighbors(seq, index, r:Union[float,int], exclude_self:bool=True) -> tuple:
     nneigh = len(index.radius_search(seq, r=r, exclude_self=exclude_self))
     return (seq, nneigh)
 
-def find_neighbors_within_radius(query, dataset, hasher:Cdr3Hasher, r:Union[float,int], k:int=150, p:int=3, ncpus:int=1):
+def find_neighbors_within_radius(query, dataset, hasher:Cdr3Hasher, r:Union[float,int], index=None, k:int=150, p:int=3, ncpus:int=1):
     '''
     Retrieve number of neighbors within radius r in dataset for all sequences in query. 
 
@@ -33,11 +33,12 @@ def find_neighbors_within_radius(query, dataset, hasher:Cdr3Hasher, r:Union[floa
         Number of cells to probe during index search.
     '''
     
-    # Set up the index
-    t0 = time.time()
-    index = IvfIndex(hasher=hasher, n_centroids=k, n_probe=p)
-    index.add(dataset)
-    print(f'Time elapsed building index: {np.round(time.time()-t0, 2)} s.')
+    # Set up the index if none provided
+    if index is None:
+        index = IvfIndex(hasher=hasher, n_centroids=k, n_probe=p)
+        index.add(dataset)
+    else:
+        pass
 
     # if ncpus > 1:
     #     '''
@@ -62,10 +63,13 @@ def find_neighbors_within_radius(query, dataset, hasher:Cdr3Hasher, r:Union[floa
     # else:
 
     if isinstance(query, list):
-        t0 = time.time()
-        counts = [nneighbors(seq=seq, index=index, r=r, exclude_self=True) for seq in query]
-        print(f'Time elapsed finding neighbors: {time.time()-t0} s.')
-        return dict(counts)
+        X = hasher.fit_transform(query)
+        lims, D, I = index.idx.range_search(X, thresh=r)
+        return dict([(j, int(lims[i+1]-lims[i])) for i,j in enumerate(query)])
+        # t0 = time.time()
+        # counts = [nneighbors(seq=seq, index=index, r=r, exclude_self=True) for seq in query]
+        # print(f'Time elapsed finding neighbors: {time.time()-t0} s.')
+        # return dict(counts)
     elif isinstance(query, pd.DataFrame):
         counts = index.array_search(query=query, r=r, exclude_self=True)
         return counts.source.value_counts().to_dict()
@@ -100,8 +104,7 @@ class NeighborEnrichment():
         '''
         Generate a background dataset by randomly sampling n CDR3 sequences.
         '''
-        if self.background is None:
-            self.background = sample_cdr3s(n)
+        self.background = sample_cdr3s(n)
 
     def find_foreground_neighbors(self, eliminate_singlets:bool=True):
         fg = find_neighbors_within_radius(
@@ -135,7 +138,7 @@ class NeighborEnrichment():
         pvals = [hypergeom.sf(i, M, n, i+j) for i,j in zip(n_f,n_b)]
         return pd.DataFrame({'sequence':q, 'fg_n':n_f, 'bg_n':n_b, 'pvalue':pvals})
 
-    def adaptive_sampling(self, depth=1e6, regime=None):
+    def adaptive_sampling(self, fdr_threshold:float=1e-08, depth=1e6, regime=None):
         '''
         Iteratively sample deeper into the background and eliminate
         TCRs that do not satisfy the significance cut-off.
@@ -150,10 +153,13 @@ class NeighborEnrichment():
         for n in sampling_regime:
             print(f'Sampling at depth: {n}')
             if n > depth:
+                print(f'Sampling depth {depth} reached')
                 break
             else:
                 self._background(int(n))
             sign = self.neighbor_significance(nf)
-            filtered = sign[(sign.bg_n == 0) | (sign.pvalue < 0.05)]
+            filtered = sign[(sign.bg_n == 0) | (sign.pvalue < 0.0005)]
             nf = {i:j for i,j in zip(filtered.sequence,filtered.fg_n)}
+            n_elim = len(sign) - len(filtered)
+            print(f'Eliminated {n_elim} TCRs,\n{len(nf)} remaining.')
         return sign
