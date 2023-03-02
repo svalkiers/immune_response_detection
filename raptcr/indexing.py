@@ -23,6 +23,7 @@ class BaseIndex(ABC):
         self.idx = idx
         self.hasher = hasher
         self.ids = {}
+        self.n = 0
 
     def _add_hashes(self, hashes):
         if not self.idx.is_trained:
@@ -33,14 +34,17 @@ class BaseIndex(ABC):
         if isinstance(self.hasher, TCRDistEncoder):
             if isinstance(X, pd.DataFrame):
                 if self.hasher.full_tcr:
-                    for i, x in enumerate(self.hasher.tcrs.iterrows()):
-                        self.ids[i] = x[1]['v_call'] + "_" + x[1]['junction_aa']
+                    for x in self.hasher.tcrs.iterrows():
+                        self.ids[self.n] = x[1]['v_call'] + "_" + x[1]['junction_aa']
+                        self.n += 1
             else:
-                for i, x in enumerate(X):
-                    self.ids[i] = x
+                for x in X:
+                    self.ids[self.n] = x
+                    self.n += 1
         else:
-            for i, x in enumerate(X):
-                self.ids[i] = x
+            for x in X:
+                self.ids[self.n] = x
+                self.n += 1
 
     def add(self, X: TcrCollection):
         """
@@ -123,18 +127,7 @@ class BaseIndex(ABC):
         return self._report_radius(I, D, exclude_self=exclude_self)
 
     def radius_search_list(self, query, r):
-        xq = self.hasher.transform(query).astype(np.float32)
-        lims, D, I = self.idx.range_search(x=xq, thresh=r)
-        result = []
-        n = 0
-        for i,j in enumerate(query):
-            nn = lims[i+1]-lims[i]
-            nbr_ids = I[int(n):int(n+nn)]
-            dist = D[int(n):int(n+nn)]
-            n += nn
-            # clone_id = '_'.join(query.loc[j][['v_call', 'junction_aa']])
-            nbrs = [self.ids[j] for j in nbr_ids]
-            result[clone_id] = (nbrs,dist)
+
             
             # nbr_df = pd.DataFrame({'target':nbrs,'distance':dist}).sort_values(by='distance')
             # nbr_df['source'] = clone_id
