@@ -286,7 +286,7 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         assert len(fullseq) == self.num_pos
         return fullseq
 
-    @lru_cache(maxsize=None)
+    # @lru_cache(maxsize=None)
     def _encode_sequence(self, seq):
         '''
         Convert a sequence to a vector by lining up the aa_vectors
@@ -301,7 +301,7 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
             vec[i*dim:(i+1)*dim] = self.aa_vectors_[aa]
         return vec
 
-    @lru_cache(maxsize=None)
+    # @lru_cache(maxsize=None)
     def _gapped_encode_cdr3(self, cdr3):
         '''
         Convert a cdr3 of variable length to a fixed-length vector
@@ -311,7 +311,8 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         embedding given by aa_vectors
         '''
         return self._encode_sequence(self._trim_and_gap_cdr3(cdr3))
-
+    
+    # @lru_cache(maxsize=None)
     def _gapped_encode_tcr_chains(self, tcrs:pd.DataFrame) -> np.array:
         '''
         Convert a TCR (V gene + CDR3) of variable length to a fixed-length vector
@@ -331,29 +332,32 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
             print(f"WARNING: Removing TCRs with {to_remove}. This is a temporary measure to prevent KeyError caused by '*' character.\n")
             self.tcrs = self.tcrs[~self.tcrs.v_call.isin(to_remove)]
 
-        gene_cdr_strings = setup_gene_cdr_strings(self.organism, self.chain)
-        num_pos_other_cdrs = len(next(iter(gene_cdr_strings.values())))
-        assert all(len(x)==num_pos_other_cdrs for x in gene_cdr_strings.values())
-
-        vec_len = self.aa_dim * (num_pos_other_cdrs + self.num_pos)
-        print(
-            f'gapped_encode_tcr_chains: aa_mds_dim={self.aa_dim}\n',
-            f'num_pos_other_cdrs={num_pos_other_cdrs}',
-            f'num_pos_cdr3={self.num_pos}', 
-            f'vec_len={vec_len}'
-            )
+        vec_len = self.aa_dim * (self.num_pos_other_cdrs + self.num_pos)
+        # Perhaps we should not print this message
+        # print(
+        #     f'gapped_encode_tcr_chains: aa_mds_dim={self.aa_dim}\n',
+        #     f'num_pos_other_cdrs={self.num_pos_other_cdrs}',
+        #     f'num_pos_cdr3={self.num_pos}', 
+        #     f'vec_len={vec_len}'
+        #     )
 
         vecs = []
         for v, cdr3 in zip(self.tcrs['v_call'], self.tcrs['junction_aa']):
-            v_vec = self._encode_sequence(gene_cdr_strings[v])
+            v_vec = self._encode_sequence(self.gene_cdr_strings[v])
             cdr3_vec = np.sqrt(self.cdr3_weight) * self._gapped_encode_cdr3(cdr3)
             vecs.append(np.concatenate([v_vec, cdr3_vec]))
         vecs = np.array(vecs)
         assert vecs.shape == (self.tcrs.shape[0], vec_len)
         return vecs
 
+    # def _():
+
+
     def fit(self, X=None, y=None):
         self.aa_vectors_ = self._calc_tcrdist_aa_vectors()
+        self.gene_cdr_strings = setup_gene_cdr_strings(self.organism, self.chain)
+        self.num_pos_other_cdrs = len(next(iter(self.gene_cdr_strings.values())))
+        assert all(len(x)==self.num_pos_other_cdrs for x in self.gene_cdr_strings.values())
         return self
 
     def transform(self, X: Union[TcrCollection, pd.DataFrame, list, str], y=None) -> np.array:
