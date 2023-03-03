@@ -19,7 +19,7 @@ def add_cdr_columns(df:pd.DataFrame, vcol:str='v_call') -> pd.DataFrame:
     '''
     Adds CDR1 and CDR2 information to TCR sequences based on V gene allele annotation.
     '''
-    vgene = get_vgene_reference()
+    vgene = vgene_to_cdr()
     df['cdr1_b_aa'] = df[vcol].map(dict(zip(vgene['id'],vgene['cdr1'])))
     df['cdr2_b_aa'] = df[vcol].map(dict(zip(vgene['id'],vgene['cdr2'])))
     return df

@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 
+from .datasets import sample_tcrs
+
 def get_vfam(df, vcol='v_call'):
     '''
     Extract V gene family information from V gene column.
@@ -29,7 +31,11 @@ def match_vj_distribution(n:int, foreground:pd.DataFrame, background:pd.DataFram
     '''
     # Use default background when none specified
     if background is None:
-        background = pd.read_csv('./raptcr/datasets/1m_sequences.tsv', sep='\t')
+        if n > 1e6:
+            background = sample_tcrs(n)
+        else:
+            background = sample_tcrs(int(1e6))
+        # background = pd.read_csv('./raptcr/datasets/1m_sequences.tsv', sep='\t')
     else:
         cols = background.columns
         assert 'v_call' in cols and 'j_call' in cols and 'junction_aa' in cols,\
@@ -40,13 +46,20 @@ def match_vj_distribution(n:int, foreground:pd.DataFrame, background:pd.DataFram
     foreground['vfam'] = get_vfam(foreground)
     background['jfam'] = get_jfam(background)
     foreground['jfam'] = get_jfam(foreground)
-    vfreqs = foreground.vfam.value_counts()/n
-    jfreqs = foreground.jfam.value_counts()/n
+    vfreqs = foreground.vfam.value_counts()/foreground.vfam.value_counts().sum()
+    jfreqs = foreground.jfam.value_counts()/foreground.jfam.value_counts().sum()
     vfam_counts = dict(np.round(vfreqs*n, 0).astype(int))
     jfam_counts = dict(np.round(jfreqs*n, 0).astype(int))
+    actual_n = min(sum(list(vfam_counts.values())), sum(list(jfam_counts.values())))
 
     # Sample V and J genes according to gene family frequencies in the foreground
-    vgenes = pd.concat([background[background.vfam==v].v_call.sample(vfam_counts[v]) for v in vfam_counts])
-    jgenes = pd.concat([background[background.jfam==j][['j_call','junction_aa']].sample(jfam_counts[j]) for j in jfam_counts])
+    vgenes = pd.concat([background[background.vfam==v].v_call.sample(vfam_counts[v], replace=True) for v in vfam_counts])
+    jgenes = pd.concat([background[background.jfam==j][['j_call','junction_aa']].sample(jfam_counts[j], replace=True) for j in jfam_counts])
+    
+    if actual_n < n:
+        vgenes = vgenes.sample(actual_n)
+        jgenes = jgenes.sample(actual_n)
+    else:
+        pass
 
-    return pd.concat([vgenes.reset_index(drop=True), jgenes.reset_index(drop=True)], axis=1)
+    return pd.concat([vgenes.reset_index(drop=True), jgenes.reset_index(drop=True)], axis=1).dropna()
