@@ -665,3 +665,135 @@ def read_britanova_tcrs(filename, max_tcrs=None, min_count=2):
     print('num_tcrs:', tcrs.shape[0], filename)
     return tcrs
 
+def resample_background_tcrs_v4(organism, chain, junctions):
+    from tcrdist.tcr_sampler import parse_tcr_junctions, resample_shuffled_tcr_chains
+
+    multiplier = 3 # so we have enough to match distributions
+    bg_tcr_tuples, src_junction_indices = resample_shuffled_tcr_chains(
+        organism, multiplier * junctions.shape[0], chain, junctions,
+        return_src_junction_indices=True,
+    )
+
+    resamples = []
+    for tcr, inds in zip(bg_tcr_tuples, src_junction_indices):
+        if len(resamples)%50000==0:
+            print('resample_background_tcrs_v4: build nucseq_srclist', len(resamples),
+                  len(bg_tcr_tuples))
+        v,j,cdr3aa,cdr3nt = tcr
+        vjunc = junctions.iloc[inds[0]]
+        jjunc = junctions.iloc[inds[1]]
+        nucseq_src = (vjunc.cdr3b_nucseq_src[:inds[2]] +
+                      jjunc.cdr3b_nucseq_src[inds[2]:])
+        assert len(tcr[3]) == len(nucseq_src)
+        #dfl.append(dict(v=v, j=j, cdr3aa=cdr3aa, cdr3nt=cdr3nt, nucseq_src=nucseq_src))
+        resamples.append((v, j, cdr3aa, cdr3nt, nucseq_src))
+
+    fg_nucseq_srcs = list(junctions.cdr3b_nucseq_src)
+
+    # try to match lengths first
+    fg_lencounts = Counter(len(x.cdr3b) for x in junctions.itertuples())
+
+    N = junctions.shape[0]
+    good_resamples = resamples[:N]
+    bad_resamples = resamples[N:]
+
+    bg_lencounts = Counter(len(x[2]) for x in good_resamples)
+    all_lencounts = Counter(len(x[2]) for x in resamples)
+    if not all(all_lencounts[x]>=fg_lencounts[x] for x in fg_lencounts):
+        print('dont have enough of all lens')
+
+    tries = 0
+    too_many_tries = 10*junctions.shape[0]
+
+    while True:
+        tries += 1
+        # pick a good tcr with a bad length and a bad tcr with a good length, swap them
+        ii = np.random.randint(0,len(bad_resamples))
+        iilen = len(bad_resamples[ii][2])
+        if bg_lencounts[iilen] < fg_lencounts[iilen]: # too few of len=iilen
+            while True:
+                tries += 1
+                jj = np.random.randint(0,len(good_resamples))
+                jjlen = len(good_resamples[jj][2])
+                if bg_lencounts[jjlen] > fg_lencounts[jjlen] or tries>too_many_tries:
+                    break
+
+            if tries>too_many_tries:
+                print('WARNING too_many_tries1:', tries)
+                break
+            # swap!
+            dev = sum(abs(fg_lencounts[x]-bg_lencounts[x]) for x in fg_lencounts)
+            #print(f'swap: {dev} {iilen} {jjlen} {tries} {too_many_tries}')
+            tmp = good_resamples[jj]
+            good_resamples[jj] = bad_resamples[ii]
+            bad_resamples[ii] = tmp
+            bg_lencounts[iilen] += 1
+            bg_lencounts[jjlen] -= 1
+
+            # are we done? if so, break out
+            if all((fg_lencounts[x]<=bg_lencounts[x] or
+                    bg_lencounts[x]==all_lencounts[x]) for x in fg_lencounts):
+                break
+            else:
+                pass
+                # print('devs:', end=' ')
+                # for ii in range(100):
+                #     if fg_lencounts[ii] != bg_lencounts[ii]:
+                #         print(ii, fg_lencounts[ii]-bg_lencounts[ii], end=' ')
+                # print()
+
+    assert len(good_resamples)
+    # now try to match the N insertion distributions, while preserving the
+    # length distributions
+    fg_ncounts = Counter(x.count('N') for x in fg_nucseq_srcs)
+    bg_ncounts = Counter(x[4].count('N') for x in good_resamples)
+    all_ncounts = Counter(x[4].count('N') for x in resamples)
+
+    tries = 0
+    too_many_tries = 10*junctions.shape[0]
+
+    for ii in range(len(bad_resamples)):
+        tries += 1
+        iilen = len(bad_resamples[ii][2])
+        if bg_lencounts[iilen]==0:
+            continue
+        iinc = bad_resamples[ii][4].count('N')
+        if iinc in [0,1] and fg_ncounts[iinc] > bg_ncounts[iinc]: # most biased
+            # find good_resamples with same len, elevated nc
+            while True:
+                tries += 1
+                jj = np.random.randint(0,len(good_resamples))
+                jjlen = len(good_resamples[jj][2])
+                if jjlen != iilen:
+                    continue
+                jjnc = good_resamples[jj][4].count('N')
+                if bg_ncounts[jjnc] > fg_ncounts[jjnc]:
+                    break
+                if tries > too_many_tries:
+                    break
+            if tries > too_many_tries:
+                print('WARNING too_many_tries2:', tries)
+                break
+            #print('swap:', iinc, jjnc, iilen, fg_ncounts[iinc]-bg_ncounts[iinc],
+            #      tries)
+            tmp = good_resamples[jj]
+            good_resamples[jj] = bad_resamples[ii]
+            bad_resamples[ii] = tmp
+            bg_ncounts[iinc] += 1
+            bg_ncounts[jjnc] -= 1
+
+
+    print('final Ndevs:', end=' ')
+    for ii in range(100):
+        if fg_ncounts[ii] != bg_ncounts[ii]:
+            print(ii, fg_ncounts[ii]-bg_ncounts[ii], end=' ')
+    print()
+
+    print('final Ldevs:', end=' ')
+    for ii in range(100):
+        if fg_lencounts[ii] != bg_lencounts[ii]:
+            print(ii, fg_lencounts[ii]-bg_lencounts[ii], end=' ')
+    print()
+
+    return [x[:4] for x in good_resamples]
+    #return fg_ncounts, bg_ncounts, all_ncounts

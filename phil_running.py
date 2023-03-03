@@ -75,7 +75,7 @@ elif args.mode == 'brit_vs_bg': # britanova vs background searches
 
     bg_nums = args.bg_nums
     if bg_nums is None:
-        bg_nums = list(range(6))
+        bg_nums = list(range(7))
 
     # load data from the Britanova aging study; I downloaded the files from:
     # https://zenodo.org/record/826447#.Y-7Ku-zMIWo
@@ -129,6 +129,9 @@ elif args.mode == 'brit_vs_bg': # britanova vs background searches
             bg_tcrs = pd.DataFrame([dict(v=x[0], cdr3=x[2]) for x in bg_tcr_tuples])
         elif bgnum==5:
             bg_tcr_tuples = resample_cdr3_nt_regions(junctions) # NEW!
+            bg_tcrs = pd.DataFrame([dict(v=x[0], cdr3=x[2]) for x in bg_tcr_tuples])
+        elif bgnum==6:
+            bg_tcr_tuples = resample_background_tcrs_v4(organism, chain, junctions)
             bg_tcrs = pd.DataFrame([dict(v=x[0], cdr3=x[2]) for x in bg_tcr_tuples])
 
         bg_tcrs.rename(columns={'v':v_column, 'cdr3':cdr3_column},

@@ -51,6 +51,20 @@ def read_yfv_tcrs(fname, min_count=2):
     tcrs = tcrs['count v j cdr3nt cdr3aa'.split()]
     return tcrs
 
+def read_reparsed_emerson_tcrs(fname):
+    tcrs = pd.read_table(fname)
+    tcrs = tcrs[tcrs.productive]
+    tcrs.rename(columns={'v_gene':'v', 'j_gene':'j', 'cdr3':'cdr3aa',
+                         'cdr3_nucseq':'cdr3nt'}, inplace=True)
+    tcrs['count'] = 5 # dummy, these files don't have abundance information
+
+    v_column, j_column, cdr3_column, organism, chain = 'v','j','cdr3aa','human','B'
+    tcrs = filter_out_bad_genes_and_cdr3s(
+        tcrs, v_column, cdr3_column, organism, chain, j_column=j_column)
+    print('num_tcrs:', tcrs.shape[0], fname)
+    tcrs = tcrs['count v j cdr3nt cdr3aa'.split()]
+    return tcrs
+
 def get_original_18_ftags():
     fnames = glob('/home/pbradley/csdat/raptcr/slurm/run4/*_12.5_r0_fg*py')
     assert len(fnames) == 18
@@ -70,7 +84,552 @@ def calc_tcrdist_matrix(df1, df2, tcrdister):
     return np.array([tcrdister.single_chain_distance(a,b)
                      for a in l1 for b in l2]).reshape((len(l1), len(l2)))
 
+
+
+def get_emerson_files_for_allele(allele):
+    ''' allele is 'A*02:01' or something like that
+
+    returns the filenames of all repertoires for subjects with that allele
+    '''
+    assert '*' in allele and ':' in allele and 'HLA' not in allele
+
+    fname = '/home/pbradley/csdat/raptcr/emerson/newest_hla_info_df.tsv'
+    df = pd.read_table(fname)
+
+    dirname = '/home/pbradley/csdat/raptcr/emerson/'
+
+    fnames = [f'{dirname}{row.hipid}_reparsed.tsv'
+              for _, row in df.iterrows()
+              if allele in row.tolist()]
+
+    return fnames
+
+
+def compute_leiden_clusters_from_vecs(vecs, num_nbrs=5, random_seed=20):
+    import leidenalg
+    import igraph as ig
+    from scipy.spatial.distance import squareform, pdist
+    #from sklearn.metrics import pairwise_distances
+    num_nbrs = 5
+    num_groups = vecs.shape[0]
+    g = ig.Graph(directed=True)
+    g.add_vertices(num_groups)
+    print('distances')
+    distances = squareform(pdist(vecs))
+    print('DONE distances')
+    #distances = pairwise_distances(X2, metric='euclidean')
+    for ii in range(num_groups):
+        distances[ii,ii] = 10000
+        inds = np.argsort(distances[ii,:])
+        g.add_edges(list(zip([ii]*num_nbrs, inds[:num_nbrs])))
+    # sources, targets = adjacency.nonzero()
+    # weights = adjacency[sources, targets]
+    # if isinstance(weights, np.matrix):
+    #     weights = weights.A1
+    # g.add_vertices(adjacency.shape[0])  # this adds adjacency.shape[0] vertices
+    # g.add_edges(list(zip(sources, targets)))
+    partition_type = leidenalg.RBConfigurationVertexPartition
+    print('leiden')
+    part = leidenalg.find_partition(g, partition_type, seed=random_seed)
+    print('DONE leiden')
+
+    leiden_clusters = np.array(part.membership)
+    return leiden_clusters
+
+
+
 #####################################
+
+if 1: # look for associations between significant tcrs and hla alleles
+    from scipy.stats import hypergeom
+    import faiss
+
+
+    if 2: # HACKING make graph plot of the tcrs
+        import networkx as nx
+        import matplotlib.pyplot as plt
+
+
+        min_hipids_count = 20
+        outprefix=f'/home/pbradley/csdat/raptcr/run17run18_umap_mc_{min_hipids_count}'
+
+        tcrs = pd.read_table('run17run18_hla_assoc_pvals_input_tcrs_pvals.tsv')
+        print('done reading')
+        graph_tcrs = tcrs[tcrs.tcr_aa_hipids_count>=min_hipids_count]\
+                     .drop_duplicates('tcr_aa')
+        print('done mask+deduping')
+        if min_hipids_count==50:
+            assert graph_tcrs.shape[0] == 527 # hack
+        graph_tcrs.sort_values('tcr_aa_hipids_count', inplace=True, ascending=False)
+
+        v_column, j_column, cdr3_column, organism, chain = 'v','j','cdr3aa','human','B'
+        aa_mds_dim = 8
+        #graph_tcrs = pd.read_table('tmp.tsv')
+        vecs = gapped_encode_tcr_chains(
+            graph_tcrs, organism, chain, aa_mds_dim, v_column=v_column,
+            cdr3_column=cdr3_column).astype(np.float32)
+
+
+        hla_pvals = pd.read_table('run17run18_hla_assoc_pvals.tsv')
+        hla_pvals = hla_pvals.sort_values('pvalue').drop_duplicates('tcr_aa').\
+                    set_index('tcr_aa', drop=False)
+        print('hla_pvals:', hla_pvals.allele.value_counts())
+
+        graph_tcrs = graph_tcrs.join(hla_pvals['pvalue allele'.split()],
+                                     on='tcr_aa', rsuffix='_hla')
+        graph_tcrs['pvalue_hla'] = graph_tcrs.pvalue_hla.fillna(1.0)
+
+
+        if 2:
+            import umap
+            reducer = umap.UMAP(random_state=11, min_dist=1)
+            print('run UMAP:', vecs.shape)
+            xy = reducer.fit_transform(vecs)
+            graph_tcrs['umap_0'] = xy[:,0]
+            graph_tcrs['umap_1'] = xy[:,1]
+            print('done')
+
+            clusters = compute_leiden_clusters_from_vecs(vecs)
+            graph_tcrs['leiden'] = clusters
+            print('num clusters:', np.max(clusters)+1)
+            cmap = plt.get_cmap('tab20')
+            cluster_colors = [cmap.colors[i%20] for i in clusters]
+
+            plt.figure(figsize=(12,12))
+            sizes = graph_tcrs.tcr_aa_hipids_count * 20/50.
+            plt.scatter(xy[:,0], xy[:,1], c=cluster_colors, s=sizes)#20)
+            for c in range(np.max(clusters)+1):
+                row = graph_tcrs[graph_tcrs.leiden==c].iloc[0]
+                plt.text(row.umap_0, row.umap_1,
+                         row.v.split('*')[0]+'_'+row.cdr3aa[3:-2],
+                         fontsize=6)
+
+            # draw some edges
+            idx = faiss.IndexFlatL2(vecs.shape[1])
+            idx.add(vecs)
+            start = timer()
+            print('run range search')
+            lims,D,I = idx.range_search(vecs, 12.5)
+            print(f'vecs range_search took {timer()-start:.2f} seconds')
+            for ii,(start,stop) in enumerate(zip(lims[:-1], lims[1:])):
+                for jj in I[start:stop]:
+                    plt.plot([xy[ii,0], xy[jj,0]], [xy[ii,1], xy[jj,1]],
+                             c='k', zorder=-1, linewidth=.5)
+
+
+            plt.tight_layout()
+            pngfile = outprefix+'.png'
+            plt.savefig(pngfile)
+            print('made:', pngfile)
+
+
+            # make another one colored by HLA pvalue
+            colors = np.sqrt(-1*np.log10(graph_tcrs.pvalue_hla))
+            plt.figure(figsize=(12,12))
+            plt.scatter(xy[:,0], xy[:,1], c=colors, s=20, vmax=np.sqrt(25),
+                        vmin=np.sqrt(3))
+            #plt.colorbar()
+            plt.tight_layout()
+            pngfile = outprefix+'_hla_pvals.png'
+            plt.savefig(pngfile)
+            print('made:', pngfile)
+
+
+            exit()
+
+        idx = faiss.IndexFlatL2(vecs.shape[1])
+        idx.add(vecs)
+        start = timer()
+        print('run range search')
+        lims,D,I = idx.range_search(vecs, 12.5)
+        print(f'vecs range_search took {timer()-start:.2f} seconds')
+
+        G = nx.Graph()
+        for ii, (start,stop) in enumerate(zip(lims[:-1], lims[1:])):
+            for nbr in I[start:stop]:
+                if ii<nbr:
+                    G.add_edge(ii,nbr)
+
+        plt.figure(figsize=(12,12))
+
+        nodes = set(G.nodes())
+
+        labels = {ii:x for ii,x in enumerate(graph_tcrs.tcr_aa)
+                  if ii in nodes}
+
+        k = 2/np.sqrt(len(G.nodes())) # default is 1/sqrt(N)
+        pos = nx.drawing.layout.spring_layout(G, k=k)
+
+        nx.draw_networkx(G, pos, ax=plt.gca(), node_size=10, labels=labels)
+                         #with_labels=False)
+        plt.show()
+        plt.close('all')
+
+
+
+
+        exit()
+
+
+
+    min_allele_count = 10 # 10
+    min_tcr_count = 50 #10 #5
+    num_hipids = 666
+    min_overlap = 5
+
+    fnames = glob('run1[78]_pvals.tsv')
+    dfl = []
+    for fname in fnames:
+        print('reading:', fname)
+        dfl.append(pd.read_table(fname))
+        print('done')
+
+    print('concatenating')
+    pvals = pd.concat(dfl)
+    print('DONE concatenating')
+    hipids = sorted(pvals.hipid.unique())
+    assert len(hipids) == num_hipids
+    assert len(pvals.hipid.unique()) == num_hipids
+    pvals['tcr_aa'] = pvals.v + "_" + pvals.cdr3aa
+    pvals_occs = pvals['tcr_aa hipid'.split()].drop_duplicates()
+    tcr_counts = pvals_occs.tcr_aa.value_counts()
+    tcr_counts = tcr_counts[tcr_counts>=min_tcr_count]
+    tcrs = list(tcr_counts.index)
+    tcrs_set = set(tcr_counts.index)
+    pvals = pvals[pvals.tcr_aa.isin(tcrs_set)]
+    print('num_tcrs above count:', len(tcrs))
+
+    if 2: # make graph plot of the tcrs
+        import networkx as nx
+        import matplotlib.pyplot as plt
+
+        v_column, j_column, cdr3_column, organism, chain = 'v','j','cdr3aa','human','B'
+        aa_mds_dim = 8
+        graph_tcrs = pvals.drop_duplicates(['v','cdr3aa'])
+        vecs = gapped_encode_tcr_chains(
+            graph_tcrs, organism, chain, aa_mds_dim, v_column=v_column,
+            cdr3_column=cdr3_column).astype(np.float32)
+        idx = faiss.IndexFlatL2(vecs.shape[1])
+        idx.add(vecs)
+        start = timer()
+        print('run range search')
+        lims,D,I = idx.range_search(vecs, 12.5)
+        print(f'vecs range_search took {timer()-start:.2f} seconds')
+
+        G = nx.Graph()
+        for ii, (start,stop) in enumerate(zip(lims[:-1], lims[1:])):
+            for nbr in I[start:stop]:
+                if ii<nbr:
+                    G.add_edge(ii,nbr)
+
+        plt.figure(figsize=(12,12))
+
+        k = 2/np.sqrt(len(G.nodes())) # default is 1/sqrt(N)
+        pos = nx.drawing.layout.spring_layout(G, k=k)
+
+        nx.draw_networkx(G, pos, ax=plt.gca(), node_size=10, with_labels=False)
+        plt.show()
+        plt.close('all')
+
+
+
+
+        exit()
+
+
+
+
+
+    exit()
+
+
+if 0: # look for associations between significant tcrs and hla alleles
+    from scipy.stats import hypergeom
+    #import faiss
+
+    min_allele_count = 10
+    min_tcr_count = 5
+    num_hipids = 666
+    min_overlap = 5
+    outfile = 'run17run18_hla_assoc_pvals.tsv'
+
+    fnames = glob('run1[78]_pvals.tsv')
+    dfl = []
+    for fname in fnames:
+        print('reading:', fname)
+        dfl.append(pd.read_table(fname))
+        print('done')
+
+    print('concatenating')
+    pvals = pd.concat(dfl)
+    print('DONE concatenating')
+    hipids = sorted(pvals.hipid.unique())
+    assert len(hipids) == num_hipids
+    assert len(pvals.hipid.unique()) == num_hipids
+    pvals['tcr_aa'] = pvals.v + "_" + pvals.cdr3aa
+    pvals_occs = pvals['tcr_aa hipid'.split()].drop_duplicates()
+    tcr_counts = pvals_occs.tcr_aa.value_counts()
+    tcr_counts = tcr_counts[tcr_counts>=min_tcr_count]
+    tcrs = list(tcr_counts.index)
+    tcrs_set = set(tcr_counts.index)
+    tcr_counts.name = 'tcr_aa_hipids_count'
+    pvals = pvals[pvals.tcr_aa.isin(tcrs_set)].join(tcr_counts, on='tcr_aa')
+    print('num_tcrs above count:', len(tcrs))
+
+    outfile_pvals = outfile[:-4]+'_input_tcrs_pvals.tsv'
+    pvals.to_csv(outfile_pvals, sep='\t', index=False)
+    print('made:', outfile_pvals)
+    exit()
+
+    tcr_occs = np.zeros((len(tcrs), num_hipids), dtype=bool)
+    tcr2index = {x:i for i,x in enumerate(tcrs)}
+    hipid2index = {x:i for i,x in enumerate(hipids)}
+    print('setup tcr_occs')
+    for l in pvals.itertuples():
+        tcr_occs[tcr2index[l.tcr_aa], hipid2index[l.hipid]] = True
+    print('done')
+
+    fname = '/home/pbradley/csdat/raptcr/emerson/newest_hla_info_df.tsv'
+    hla_df = pd.read_table(fname)
+
+    loci = sorted(set([x[:-2] for x in hla_df.columns if x!='hipid']))
+
+    dfl = []
+    for locus in loci:
+        col0,col1 = hla_df[locus+'_0'], hla_df[locus+'_1']
+        locus_hipids = set(hla_df[~col0.isna()].hipid)
+        locus_mask = np.array([x in locus_hipids for x in hipids])
+        total_locus = locus_mask.sum()
+        alleles = set(col0)|set(col1)
+        print('total_locus:', total_locus, locus, flush=True)
+
+        for allele in alleles:
+            posmask = (col0==allele)|(col1==allele)
+            if posmask.sum()<min_allele_count:
+                continue
+            allele_hipids = set(hla_df[posmask].hipid)
+            allele_mask = np.array([x in allele_hipids for x in hipids])
+            total_w_allele = allele_mask.sum()
+            assert total_w_allele == posmask.sum()
+
+            for itcr, tcr in enumerate(tcrs):
+                tcr_mask = tcr_occs[itcr]
+                overlap = np.sum(tcr_mask&allele_mask)
+                if overlap >= min_overlap:
+                    total_w_tcr = sum(tcr_mask&locus_mask)
+                    pval = hypergeom.sf(
+                        overlap-1, total_locus, total_w_tcr, total_w_allele)
+                    if pval<1e-3:
+                        print('pval:', pval, overlap, total_w_tcr, total_w_allele,
+                              total_locus, tcr, allele)
+                        dfl.append(dict(
+                            pvalue=pval,
+                            overlap=overlap,
+                            total_w_tcr=total_w_tcr,
+                            total_w_allele=total_w_allele,
+                            total_locus=total_locus,
+                            locus=locus,
+                            allele=allele,
+                            tcr_aa=tcr,
+                            v = tcr.split('_')[0],
+                            cdr3aa = tcr.split('_')[1],
+                        ))
+
+
+    pd.DataFrame(dfl).to_csv(outfile, sep='\t', index=False)
+
+    exit()
+
+
+
+if 0: # look at the emerson A*02:01 repertoire results; also britanova results
+
+    runtag = 'run16'
+    #runtag = 'run18'
+    #runtag = 'run17'
+    radii = [12.5, 18.5, 24.5]
+    num_repeats = 10
+    bg_num = 6
+    max_evalue = 100.
+    BRITANOVA = False
+
+    outfile = f'{runtag}_pvals.tsv'
+
+    if runtag == 'run18':
+        fnames = glob('/home/pbradley/csdat/raptcr/emerson/*reparsed.tsv')
+        assert len(fnames) == 666
+        old_fnames = set(get_emerson_files_for_allele('A*02:01'))
+        fnames = [x for x in fnames if x not in old_fnames]
+        assert len(fnames) == 666 - 268
+    elif runtag == 'run16':
+        BRITANOVA = True
+        fnames = glob('/home/pbradley/gitrepos/immune_response_detection/'
+                      'data/phil/britanova/A*gz')
+    else:
+        fnames = get_emerson_files_for_allele('A*02:01')
+    runprefix = f'/home/pbradley/csdat/raptcr/slurm/{runtag}/{runtag}'
+
+    dfl = []
+    for fname in fnames:
+        print(fnames.index(fname), len(fnames), fname, flush=True)
+        ftag = fname.split('/')[-1][:-3]
+        if BRITANOVA:
+            hipid = ftag
+        else:
+            hipid = ftag[:8]
+        tcrs = read_britanova_tcrs(fname, max_tcrs = 500000)
+        for radius in radii:
+
+            bg_files = glob(f'{runprefix}_{ftag}_{radius:.1f}_*_bg_{bg_num}*npy')
+            print(ftag, 'numfiles:', len(bg_files), radius, fname)
+            if len(bg_files) != num_repeats:
+                print('ERROR missing:', len(bg_files), radius, fname)
+                continue
+            # read fg counts
+            fg_counts=np.load(f'{runprefix}_{ftag}_{radius:.1f}_r0_fg_nbr_counts.npy')
+            num_tcrs = fg_counts.shape[0]
+            assert num_tcrs == tcrs.shape[0]
+
+            # read bg counts, compute pvals
+            bg_counts = np.zeros((num_tcrs,))
+            for r in range(10):
+                bg_counts += np.load(f'{runprefix}_{ftag}_{radius:.1f}_r{r}_bg_'
+                                     f'{bg_num}_nbr_counts.npy')
+
+            num_bg_tcrs = num_repeats*num_tcrs
+
+
+            min_fg_bg_nbr_ratio = 2. # actually these are the function defaults
+            max_fg_bg_nbr_ratio = 100
+            target_bg_nbrs = None
+            pvals = compute_nbr_count_pvalues(
+                fg_counts, bg_counts, num_bg_tcrs,
+                min_fg_bg_nbr_ratio=min_fg_bg_nbr_ratio,
+                max_fg_bg_nbr_ratio=max_fg_bg_nbr_ratio,
+                target_bg_nbrs=target_bg_nbrs,
+            )
+            #if 2:
+            #    print('using rescaled evalues!')
+            #    pvals['evalue'] = pvals.rescaled_evalue
+            pvals = pvals.join(tcrs['count v j cdr3nt cdr3aa'.split()].reset_index(),
+                               on='tcr_index')
+            pvals = pvals.sort_values('evalue').drop_duplicates(['v','j','cdr3aa'])
+            pvals = pvals[pvals.evalue<= max_evalue]
+            pvals['radius'] = radius
+            pvals['hipid'] = hipid
+            dfl.append(pvals)
+
+        #tmp
+        if dfl:
+            pd.concat(dfl).to_csv(outfile, sep='\t', index=False)
+
+
+    if dfl:
+        df = pd.concat(dfl)
+        df.to_csv(outfile, sep='\t', index=False)
+        print('made:', outfile)
+
+    exit()
+
+
+if 0: # look at current favorite background model, seems to make too few 0-N cdr3s
+    import tcrdist
+    from tcrdist.tcr_sampler import parse_tcr_junctions, resample_shuffled_tcr_chains
+
+    #fname = DATADIR+'phil/britanova/A5-S18.txt.gz'
+    fname = './data/phil/britanova/A5-S11.txt.gz'
+    tcrs = read_britanova_tcrs(fname)#.head(10000)
+
+    v_column, j_column, cdr3_column, organism, chain = 'v','j','cdr3aa','human','B'
+    tcr_tuples = [(None,x) for x in tcrs['v j cdr3aa cdr3nt'.split()].itertuples(
+        name=None, index=None)]
+
+    junctions = parse_tcr_junctions('human', tcr_tuples)
+
+    res = resample_background_tcrs_v4(junctions)
+    exit()
+
+
+if 0: # look at current favorite background model, seems to make too few 0-N cdr3s
+    import tcrdist
+    from tcrdist.tcr_sampler import parse_tcr_junctions, resample_shuffled_tcr_chains
+
+    #fname = DATADIR+'phil/britanova/A5-S18.txt.gz'
+    fname = './data/phil/britanova/A5-S11.txt.gz'
+    tcrs = read_britanova_tcrs(fname)
+
+    v_column, j_column, cdr3_column, organism, chain = 'v','j','cdr3aa','human','B'
+    tcr_tuples = [(None,x) for x in tcrs['v j cdr3aa cdr3nt'.split()].itertuples(
+        name=None, index=None)]
+
+    junctions = parse_tcr_junctions('human', tcr_tuples)
+
+    bg_tcr_tuples, src_junction_indices = resample_shuffled_tcr_chains(
+        organism, tcrs.shape[0], chain, junctions, return_src_junction_indices=True,
+    )
+    bg_nucseq_srcs = []
+    for tcr, inds in zip(bg_tcr_tuples, src_junction_indices):
+        if len(bg_nucseq_srcs)%50000==0:
+            print(len(bg_nucseq_srcs))
+        vjunc = junctions.iloc[inds[0]]
+        jjunc = junctions.iloc[inds[1]]
+        bg_nucseq_srcs.append(vjunc.cdr3b_nucseq_src[:inds[2]] +
+                              jjunc.cdr3b_nucseq_src[inds[2]:])
+        assert len(tcr[3]) == len(bg_nucseq_srcs[-1])
+
+    fg_nucseq_srcs = list(junctions.cdr3b_nucseq_src)
+    assert len(fg_nucseq_srcs) == len(bg_nucseq_srcs)
+    plt.figure(figsize=(12,4))
+    for tag, srcs in zip(['fg','bg'], [fg_nucseq_srcs, bg_nucseq_srcs]):
+        plt.subplot(131)
+        lens = [len(x)//3 for x in srcs]
+        counts = Counter(lens)
+        mn,mx = min(counts.keys()), max(counts.keys())
+        xvals = range(mn,mx+1)
+        plt.plot(xvals, [counts[x] for x in xvals], label=tag)
+        plt.title('cdr3aa len')
+
+        plt.subplot(132)
+        lens = [x.count('N') for x in srcs]
+        counts = Counter(lens)
+        mn,mx = min(counts.keys()), max(counts.keys())
+        xvals = range(mn,mx+1)
+        plt.plot(xvals, [counts[x] for x in xvals], label=tag)
+        plt.title('num N nucs')
+        print('N0:', tag, counts[0])
+
+        plt.subplot(133)
+        lens = [x.count('D') for x in srcs]
+        counts = Counter(lens)
+        mn,mx = min(counts.keys()), max(counts.keys())
+        xvals = range(mn,mx+1)
+        plt.plot(xvals, [counts[x] for x in xvals], label=tag)
+        plt.title('num D nucs')
+        #plt.plot(xvals, np.sqrt([counts[x] for x in xvals]), label=tag)
+    plt.legend()
+    ftag = fname.split('/')[-1][:-7]
+    pngfile = f'/home/pbradley/csdat/raptcr/bg4_{ftag}_dists.png'
+    plt.savefig(pngfile)
+    print('made:', pngfile)
+
+    exit()
+
+if 0: # read our parsed version of the emerson repertoires, make 'britanova'-like files
+    #files = glob('/fh/fast/matsen_e/shared/tcr-gwas/emerson_stats/'
+    #             'trim_stats_HIP00110_w_pnucs_and_ties.tsv')
+    files = glob('/fh/fast/matsen_e/shared/tcr-gwas/emerson_stats/'
+                 'trim_stats_HIP?????_w_pnucs_and_ties.tsv')
+    assert len(files) == 666
+
+    for fname in files:
+        tcrs = read_reparsed_emerson_tcrs(fname)
+        hipid = fname.split('_')[-5]
+        outfile = f'/home/pbradley/csdat/raptcr/emerson/{hipid}_reparsed.tsv'
+        tcrs.to_csv(outfile, sep='\t', index=False)
+        print('made:', tcrs.shape[0], outfile, flush=True)
+
+    exit()
+
 
 
 
@@ -108,13 +667,13 @@ if 0: # testing new background model; it's not that great!
     exit()
 
 
-if 1: # look at YFV nndists for expanding clones
+if 0: # look at YFV nndists for expanding clones
     # this made the colorful NNbr-distances figure
     import faiss
 
-    #runtag = 'run14' # d0 10 nbrs, bgnums 4,5
+    runtag = 'run14' # d0 10 nbrs, bgnums 4,5
     #runtag = 'run12' # d15 25 nbrs
-    runtag = 'run11' # d15 10 nbrs
+    #runtag = 'run11' # d15 10 nbrs
     bgnum = 4
     aa_mds_dim = 8 # for finding nbrs of expanding clones
 
@@ -138,16 +697,18 @@ if 1: # look at YFV nndists for expanding clones
     xclones['aatcr'] = xclones.v + '_' + xclones.cdr3aa
     print('num_xclones:', xclones.shape[0])
 
-    # fg_files = sorted(glob('/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
-    #                        '??_0_*min_count_2.txt.gz'))
-    # assert len(fg_files) == 12
-    fg_files=sorted(glob('/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
-                           '??_15_*min_count_2.txt.gz'))
-    assert len(fg_files) == 7
+    if runtag == 'run14':
+        fg_files = sorted(glob('/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/'
+                               'Yellow_fever/??_0_*min_count_2.txt.gz'))
+        assert len(fg_files) == 12
+        nrows, ncols = 3, 4
+    else:
+        fg_files=sorted(glob('/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/'
+                             'Yellow_fever/??_15_*min_count_2.txt.gz'))
+        assert len(fg_files) == 7
+        nrows, ncols = 2, 4
     #fg_files = fg_files[2:3]
 
-    #nrows, ncols = 3, 4
-    nrows, ncols = 2, 4
     plt.figure(figsize=(ncols*4, nrows*4))
 
     for plotno, fg_file in enumerate(fg_files):
@@ -511,14 +1072,14 @@ if 0: # look at nbr counts in the britanova set
 
     fg_files = get_original_18_fnames()
 
-    fg_files = fg_files[-1:]
+    #fg_files = fg_files[-1:]
 
     #fg_files = fg_files[-2:]
     #fg_files = fg_files[:1]
     #fg_files = fg_files[:5]
 
     radius = 12.5
-    bgnum = 4
+    bgnum = 5
     max_evalue = 10 #0.1
     #max_evalue = 0.1
     num_lines = 50
@@ -532,9 +1093,10 @@ if 0: # look at nbr counts in the britanova set
                f'run4run5_pvals_F{len(fg_files)}_{radius:.1f}_bg{bgnum}_'
                f'tbn{target_bg_nbrs}.png')
 
-    run4prefix = '/home/pbradley/csdat/raptcr/slurm/run4/run4'
+    run4prefix = '/home/pbradley/csdat/raptcr/slurm/run4/run4' # bg 0-4
     run5prefix = '/home/pbradley/csdat/raptcr/slurm/run5/run5'
-    run8prefix = '/home/pbradley/csdat/raptcr/slurm/run8/run8'
+    run8prefix = '/home/pbradley/csdat/raptcr/slurm/run8/run8' # bg 5
+    run16prefix = '/home/pbradley/csdat/raptcr/slurm/run16/run16' # bg 6
 
     # read the rep sizes
     print('reading all rep sizes')
@@ -558,11 +1120,11 @@ if 0: # look at nbr counts in the britanova set
 
         # read bg counts, compute pvals
         all_bg_counts = {}
-        for bg in range(6):
+        for bg in range(7):
             print('reading bg counts:', bg)
             bg_counts = np.zeros((num_tcrs,))
             for r in range(10):
-                prefix = run8prefix if bg==5 else run4prefix
+                prefix = run16prefix if bg == 6 else run8prefix if bg==5 else run4prefix
                 bg_counts += np.load(f'{prefix}_{fg_tag}_{radius:.1f}_r{r}_bg_'
                                      f'{bg}_nbr_counts.npy')
             all_bg_counts[bg] = bg_counts
@@ -579,7 +1141,7 @@ if 0: # look at nbr counts in the britanova set
             max_fg_bg_nbr_ratio=max_fg_bg_nbr_ratio,
             target_bg_nbrs=target_bg_nbrs,
         )
-        if 2:
+        if 2 and target_bg_nbrs is not None:
             print('using rescaled evalues!')
             pvals['evalue'] = pvals.rescaled_evalue
         pvals = pvals.join(tcrs['count v j cdr3nt cdr3aa'.split()].reset_index(),
@@ -606,7 +1168,7 @@ if 0: # look at nbr counts in the britanova set
             num_cells = sum(tcrs[same_tcr_mask]['count'])
             obs = fg_counts[ind]
             msg= f'eval: {l.evalue:9.2e} {obs:3d} {l.expected_nbrs:5.1f} bg% '
-            for bg in range(6):
+            for bg in range(7):
                 expect = all_bg_counts[bg][ind] / 10.
                 msg += f' {100*expect/obs:3.0f}'
             msg += '  fg% '
@@ -847,17 +1409,28 @@ if 0: # setup for big calc
     radii = [12.5, 18.5, 24.5]
     #radii = [3.5, 6.5, 12.5, 18.5, 24.5]
     num_repeats = 10
-    bg_nums = [4,5]
+    bg_nums = [6]
+    #bg_nums = [4,5]
 
-    fnames = glob('/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
-                  '??_0_*min_count_2.txt.gz') ; assert len(fnames) == 12
+    fnames = glob('/home/pbradley/csdat/raptcr/emerson/*reparsed.tsv')
+    assert len(fnames) == 666
+    old_fnames = set(get_emerson_files_for_allele('A*02:01'))
+    fnames = [x for x in fnames if x not in old_fnames]
+    assert len(fnames) == 666 - 268
+    # fnames = get_emerson_files_for_allele('A*02:01')
+
+    # fnames = glob('/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
+    #               '??_0_*min_count_2.txt.gz') ; assert len(fnames) == 12
     # fnames = glob('/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
     #               '*min_count_2.txt.gz')
-    #fnames = glob('/home/pbradley/gitrepos/immune_response_detection/'
-    #              'data/phil/britanova/A*gz')
+    # fnames = glob('/home/pbradley/gitrepos/immune_response_detection/'
+    #               'data/phil/britanova/A*gz')
     print(len(fnames))
 
-    runtag = 'run13' ; xargs = ' --max_tcrs 500000 ' # yfv day 0
+    runtag = 'run18' ; xargs = ' --max_tcrs 500000 ' # emerson, A*02:01-/unk donors
+    #runtag = 'run17' ; xargs = ' --max_tcrs 500000 ' # emerson, A*02:01+ donors
+    #runtag = 'run16' ; xargs = ' --max_tcrs 500000 ' # britanova, bg_nums=[4,6]
+    #runtag = 'run13' ; xargs = ' --max_tcrs 500000 ' # yfv day 0
     #runtag = 'run9' ; xargs = ' --max_tcrs 500000 ' # yfv day 15
     #runtag = 'run8' ; xargs = ' --max_tcrs 500000 --bg_nums 5 ' # new bg model
     #runtag = 'run6' ; xargs = ' --max_tcrs 500000 ' # new repertoires
