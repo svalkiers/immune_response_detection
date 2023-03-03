@@ -23,6 +23,18 @@ def tcr_dict_to_df(neighbor_counts, cutoff=1, add_counts=False):
         return pd.DataFrame({'v_call':vgenes, 'junction_aa':cdr3aa, 'neighbors':counts})
 
 def assign_ids(query, lim):
+    '''
+    Match neighbor counts and indices.
+
+    Parameters
+    ----------
+    query
+        TCRs or CDR3 sequences for which the number of neighbors on the index
+        was calculated.
+    lim
+        Faiss range search outcome that defines the number of retrieved neighbors
+        for every queried vector.
+    '''
     if isinstance(query, list):
         return dict([(j, int(lim[i+1]-lim[i])) for i,j in enumerate(query)])
     elif isinstance(query, pd.DataFrame):
@@ -30,6 +42,22 @@ def assign_ids(query, lim):
         return dict([(j, int(lim[i+1]-lim[i])) for i,j in enumerate(indices)])
 
 def index_neighbors(query, r, index):
+    '''
+    Compute the number of neighbors on the index that are found within 
+    a radius r of each query TCR. Returns a dict of query sequences
+    and their respective neighbor count.
+
+    Parameters
+    ----------
+    query
+        TCRs or CDR3 sequences for which the number of neighbors on the index
+        should be calculated.
+    r
+        Radius parameter that defines the edge of the TCR neighborhood.
+    index
+        Index on which the search should be performed. The index needs to be
+        trained and should contain vectors to query against.
+    '''
     X = index.hasher.fit_transform(query)
     lim, D, I = index.idx.range_search(X.astype(np.float32), thresh=r)
     return assign_ids(query=index.hasher.tcrs, lim=lim)
@@ -40,16 +68,28 @@ class NeighborEnrichment():
         repertoire:Union[pd.DataFrame, list],
         hasher:Union[Cdr3Hasher, TCRDistEncoder],
         radius:Union[int,float]=12.5,
-        # n_centroids:int=1000,
-        # n_probe:int=50,
-        custom_background=None,
-        background_size=1e6,
-        ncpus:int=1
+        # custom_background=None, -> add this functionality back in later
+        # background_size=1e6,
+        # ncpus:int=1 -> this does not seem to have any influence on the computational performance
         ):
+        '''
+        Class for calculating and statistically evaluating the neighbor count of 
+        TCRs or CDR3 sequences.
 
+        Parameters
+        ----------
+        repertoire: Union[pd.DataFrame, list]
+            Repertoire of interest. This can be a list of CDR3 sequences
+            as well as a pd.DataFrame containing at least V and CDR3
+            information. Column names should satisfy AIRR data conventions.
+        hasher: Union[Cdr3Hasher, TCRDistEncoder]
+            Transformer function used to embed sequences into vector space.
+        radius: Union[int,float]
+            Radius r that determines the edge of the TCR neighborhood.
+        
+        '''
         self.repertoire = repertoire
-        self.background = custom_background
-        self.background_size = int(background_size)
+        # self.background = custom_background -> add this functionality back in later
         self.hasher = hasher
         self.rsize = len(repertoire)
         self.r = radius
@@ -61,8 +101,21 @@ class NeighborEnrichment():
         else:
             self.ncpus = ncpus
 
-    def compute_neighbors(self, exhaustive=True, k=None, n=None):
+    def compute_neighbors(self, exhaustive:bool=True, k=None, n=None):
+        '''
+        Find the number of neighbors within a repertoire of interest.
 
+        Parameters
+        ----------
+        exhaustive: bool
+            When True, performs an exhaustive search (using a faiss.IndexFlatL2) 
+            to find all neighbors in the repertoire. Uses the faiss.IndexIVFFlat
+            for a non-exhaustive alternative.
+        k
+            Number of centroids for fitting faiss.IndexIVFFlat.
+        n
+            Number of cells to probe when using the faiss.IndexIVFFlat.
+        '''
         if exhaustive:
             self.fg_index = FlatIndex(hasher=self.hasher)
         else:
@@ -71,16 +124,30 @@ class NeighborEnrichment():
             if n is None:
                 n = np.round(k/50,0)
             self.fg_index = IvfIndex(hasher=self.hasher, n_centroids=int(k), n_probe=int(n))
-
         self.fg_index.add(self.repertoire)
         self.nbr_counts = index_neighbors(query=self.repertoire, index=self.fg_index, r=self.r)
 
-    def compute_pvalues(self, prefilter=True, depth=1000001, fdr=1e-5):
+    def compute_pvalues(self, prefilter=True, depth=1000001, fdr=1):
+        '''
+        Assign p-values to neighbor counts by contrasting against a background distribution.
+        Uses a prefilter step (if True) to limit the number of vectors to query on the index.
 
+        Parameters
+        ----------
+        prefilter: bool
+            If True, uses a prefiltering step that eliminates TCRs whose foreground neighbor count
+            is less than or equal to that of a size-matched background repertoire.
+        depth
+            Size of the background repertoire.
+        fdr
+            False discovery rate threshold.
+        '''
+        # Neighbor counts in foreground should be determined
         assert self.nbr_counts is not None, 'Please compute foreground neighbors first.'
 
         print('retrieving background neighbors')
-        bg_index = IvfIndex(hasher=self.hasher, n_centroids=1000, n_probe=5)
+        k = int(depth/1000)
+        bg_index = IvfIndex(hasher=self.hasher, n_centroids=k, n_probe=5)
         if prefilter:
             print('prefiltering')
             bg = match_vj_distribution(n=self.rsize, foreground=self.repertoire)
@@ -116,7 +183,8 @@ class NeighborEnrichment():
             lambda x: hypergeom.sf(x['foreground_neighbors']-1, M, x['foreground_neighbors'] + x['background_neighbors'], N),
             axis=1
             )
-        return merged.sort_values(by='pval')
+        merged = merged.sort_values(by='pval')
+        return merged[merged.pval<=fdr]
 
 
     # def adaptive_sampling(self, fdr_threshold:float=1e-08, depth=1e6, regime=None):
