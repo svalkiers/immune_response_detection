@@ -32,7 +32,7 @@ def assign_ids(query, lim):
 def index_neighbors(query, r, index):
     X = index.hasher.fit_transform(query)
     lim, D, I = index.idx.range_search(X.astype(np.float32), thresh=r)
-    return assign_ids(query=query, lim=lim)
+    return assign_ids(query=index.hasher.tcrs, lim=lim)
 
 class NeighborEnrichment():
     def __init__(
