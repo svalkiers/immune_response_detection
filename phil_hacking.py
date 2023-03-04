@@ -136,9 +136,97 @@ def compute_leiden_clusters_from_vecs(vecs, num_nbrs=5, random_seed=20):
     leiden_clusters = np.array(part.membership)
     return leiden_clusters
 
+def compute_nbr_counts_flat(fg_vecs, bg_vecs, radius):
+    assert fg_vecs.shape[1] == bg_vecs.shape[1]
+    import faiss
+    idx = faiss.IndexFlatL2(fg_vecs.shape[1])
+    idx.add(bg_vecs)
+    start = timer()
+    lims,D,I = idx.range_search(fg_vecs, radius)
+    print(f'flat index search {fg_vecs.shape[0]}x{bg_vecs.shape[0]} took'
+          f' {timer()-start:.2f} seconds')
+    nbr_counts = lims[1:] - lims[:-1]
+    return nbr_counts
+
 
 
 #####################################
+
+if 1: # try to replicate sebastiaan's test
+
+    fname = 'data/phil/big_background_2e6.tsv'
+    #fname = 'data/phil/big_background_1e6.tsv'
+    #fname = 'data/phil/big_background.tsv'
+    print('reading:', fname)
+    big_tcrs = pd.read_table(fname).rename(
+        columns={'junction':'cdr3nt', 'junction_aa':'cdr3aa',
+                 'v_call':'v', 'j_call':'j'})
+    print('done')
+
+    num_repeats = 20
+
+    fg_size = 100000
+    bg_size = 1000000
+    radius = 12.5
+
+    outfile = f'pvaltest_{fg_size}_{bg_size}_{radius:.1f}_{num_repeats}.tsv'
+
+    thresholds = [1e-5, 1e-4, 1e-3, 1e-2, 1e-1]
+
+    dfl = []
+    for r in range(num_repeats):
+        tcrs = big_tcrs.sample(fg_size+bg_size)
+
+        fg_tcrs = tcrs.head(fg_size)
+        bg_tcrs = tcrs.tail(bg_size)
+
+        v_column, j_column, cdr3_column, organism, chain = 'v','j','cdr3aa','human','B'
+        aa_mds_dim = 8
+        fg_vecs = gapped_encode_tcr_chains(
+            fg_tcrs, organism, chain, aa_mds_dim, v_column=v_column,
+            cdr3_column=cdr3_column).astype(np.float32)
+
+        bg_vecs = gapped_encode_tcr_chains(
+            bg_tcrs, organism, chain, aa_mds_dim, v_column=v_column,
+            cdr3_column=cdr3_column).astype(np.float32)
+
+        fg_counts = compute_nbr_counts_flat(fg_vecs, fg_vecs, radius)-1
+        mask = fg_counts>=1
+        mask_bg_counts = compute_nbr_counts_flat(fg_vecs[mask], bg_vecs, radius)
+        bg_counts = np.zeros(fg_counts.shape, dtype=fg_counts.dtype)
+        bg_counts[mask] = mask_bg_counts
+        bg_counts[~mask] = 1000
+
+        min_fg_bg_nbr_ratio = 0 # everything!
+        max_fg_bg_nbr_ratio = 100 # not used for pvals
+        target_bg_nbrs = None
+
+        pvals = compute_nbr_count_pvalues(
+            fg_counts, bg_counts, bg_size,
+            min_fg_nbrs=1,
+            min_fg_bg_nbr_ratio=min_fg_bg_nbr_ratio,
+            max_fg_bg_nbr_ratio=max_fg_bg_nbr_ratio,
+            target_bg_nbrs=target_bg_nbrs,
+        )
+
+        for t in thresholds:
+            count = (pvals.pvalue<=t).sum()
+            print(f'{r:2d} t= {t:9.2e} obs: {count} exp: {t*fg_size:.3f}')
+            dfl.append(dict(
+                threshold=t,
+                num_better=count,
+                repeat=r,
+                fg_size=fg_size,
+                bg_size=bg_size,
+            ))
+
+        pd.DataFrame(dfl).to_csv(outfile, sep='\t', index=False)
+    pd.DataFrame(dfl).to_csv(outfile, sep='\t', index=False)
+    print('made:', outfile)
+
+    exit()
+
+
 
 if 1: # look for associations between significant tcrs and hla alleles
     from scipy.stats import hypergeom
