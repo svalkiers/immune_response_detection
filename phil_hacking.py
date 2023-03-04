@@ -110,7 +110,7 @@ def compute_leiden_clusters_from_vecs(vecs, num_nbrs=5, random_seed=20):
     import igraph as ig
     from scipy.spatial.distance import squareform, pdist
     #from sklearn.metrics import pairwise_distances
-    num_nbrs = 5
+
     num_groups = vecs.shape[0]
     g = ig.Graph(directed=True)
     g.add_vertices(num_groups)
@@ -152,22 +152,20 @@ def compute_nbr_counts_flat(fg_vecs, bg_vecs, radius):
 
 #####################################
 
-if 1: # try to replicate sebastiaan's test
+if 1: # simple test of hypergeom pvals on random repertoires
 
     fname = 'data/phil/big_background_2e6.tsv'
     #fname = 'data/phil/big_background_1e6.tsv'
     #fname = 'data/phil/big_background.tsv'
-    print('reading:', fname)
     big_tcrs = pd.read_table(fname).rename(
         columns={'junction':'cdr3nt', 'junction_aa':'cdr3aa',
                  'v_call':'v', 'j_call':'j'})
-    print('done')
 
     num_repeats = 20
 
     fg_size = 100000
     bg_size = 1000000
-    radius = 12.5
+    radius = 24.5
 
     outfile = f'pvaltest_{fg_size}_{bg_size}_{radius:.1f}_{num_repeats}.tsv'
 
@@ -193,7 +191,7 @@ if 1: # try to replicate sebastiaan's test
         fg_counts = compute_nbr_counts_flat(fg_vecs, fg_vecs, radius)-1
         mask = fg_counts>=1
         mask_bg_counts = compute_nbr_counts_flat(fg_vecs[mask], bg_vecs, radius)
-        bg_counts = np.zeros(fg_counts.shape, dtype=fg_counts.dtype)
+        bg_counts = np.empty_like(fg_counts)
         bg_counts[mask] = mask_bg_counts
         bg_counts[~mask] = 1000
 
@@ -211,10 +209,11 @@ if 1: # try to replicate sebastiaan's test
 
         for t in thresholds:
             count = (pvals.pvalue<=t).sum()
-            print(f'{r:2d} t= {t:9.2e} obs: {count} exp: {t*fg_size:.3f}')
+            print(f'{r:2d} t= {t:9.2e} obs: {count} exp: {t*fg_size:.3f}', flush=True)
             dfl.append(dict(
                 threshold=t,
                 num_better=count,
+                expected_num_better=np.round(fg_size*t, 3),
                 repeat=r,
                 fg_size=fg_size,
                 bg_size=bg_size,
@@ -228,15 +227,14 @@ if 1: # try to replicate sebastiaan's test
 
 
 
-if 1: # look for associations between significant tcrs and hla alleles
+if 1: # miscellaneous code for visualizing the top significant tcrs in the emerson set
     from scipy.stats import hypergeom
     import faiss
 
 
-    if 2: # HACKING make graph plot of the tcrs
+    if 2: # make graph plot of the tcrs
         import networkx as nx
         import matplotlib.pyplot as plt
-
 
         min_hipids_count = 20
         outprefix=f'/home/pbradley/csdat/raptcr/run17run18_umap_mc_{min_hipids_count}'
@@ -354,84 +352,10 @@ if 1: # look for associations between significant tcrs and hla alleles
         plt.close('all')
 
 
-
-
-        exit()
-
-
-
-    min_allele_count = 10 # 10
-    min_tcr_count = 50 #10 #5
-    num_hipids = 666
-    min_overlap = 5
-
-    fnames = glob('run1[78]_pvals.tsv')
-    dfl = []
-    for fname in fnames:
-        print('reading:', fname)
-        dfl.append(pd.read_table(fname))
-        print('done')
-
-    print('concatenating')
-    pvals = pd.concat(dfl)
-    print('DONE concatenating')
-    hipids = sorted(pvals.hipid.unique())
-    assert len(hipids) == num_hipids
-    assert len(pvals.hipid.unique()) == num_hipids
-    pvals['tcr_aa'] = pvals.v + "_" + pvals.cdr3aa
-    pvals_occs = pvals['tcr_aa hipid'.split()].drop_duplicates()
-    tcr_counts = pvals_occs.tcr_aa.value_counts()
-    tcr_counts = tcr_counts[tcr_counts>=min_tcr_count]
-    tcrs = list(tcr_counts.index)
-    tcrs_set = set(tcr_counts.index)
-    pvals = pvals[pvals.tcr_aa.isin(tcrs_set)]
-    print('num_tcrs above count:', len(tcrs))
-
-    if 2: # make graph plot of the tcrs
-        import networkx as nx
-        import matplotlib.pyplot as plt
-
-        v_column, j_column, cdr3_column, organism, chain = 'v','j','cdr3aa','human','B'
-        aa_mds_dim = 8
-        graph_tcrs = pvals.drop_duplicates(['v','cdr3aa'])
-        vecs = gapped_encode_tcr_chains(
-            graph_tcrs, organism, chain, aa_mds_dim, v_column=v_column,
-            cdr3_column=cdr3_column).astype(np.float32)
-        idx = faiss.IndexFlatL2(vecs.shape[1])
-        idx.add(vecs)
-        start = timer()
-        print('run range search')
-        lims,D,I = idx.range_search(vecs, 12.5)
-        print(f'vecs range_search took {timer()-start:.2f} seconds')
-
-        G = nx.Graph()
-        for ii, (start,stop) in enumerate(zip(lims[:-1], lims[1:])):
-            for nbr in I[start:stop]:
-                if ii<nbr:
-                    G.add_edge(ii,nbr)
-
-        plt.figure(figsize=(12,12))
-
-        k = 2/np.sqrt(len(G.nodes())) # default is 1/sqrt(N)
-        pos = nx.drawing.layout.spring_layout(G, k=k)
-
-        nx.draw_networkx(G, pos, ax=plt.gca(), node_size=10, with_labels=False)
-        plt.show()
-        plt.close('all')
-
-
-
-
-        exit()
-
-
-
-
-
     exit()
 
 
-if 0: # look for associations between significant tcrs and hla alleles
+if 0: # look for associations between significant tcrs and hla alleles on emerson set
     from scipy.stats import hypergeom
     #import faiss
 
@@ -467,7 +391,6 @@ if 0: # look for associations between significant tcrs and hla alleles
     outfile_pvals = outfile[:-4]+'_input_tcrs_pvals.tsv'
     pvals.to_csv(outfile_pvals, sep='\t', index=False)
     print('made:', outfile_pvals)
-    exit()
 
     tcr_occs = np.zeros((len(tcrs), num_hipids), dtype=bool)
     tcr2index = {x:i for i,x in enumerate(tcrs)}
@@ -580,7 +503,7 @@ if 0: # look at the emerson A*02:01 repertoire results; also britanova results
 
             # read bg counts, compute pvals
             bg_counts = np.zeros((num_tcrs,))
-            for r in range(10):
+            for r in range(num_repeats):
                 bg_counts += np.load(f'{runprefix}_{ftag}_{radius:.1f}_r{r}_bg_'
                                      f'{bg_num}_nbr_counts.npy')
 
@@ -596,9 +519,6 @@ if 0: # look at the emerson A*02:01 repertoire results; also britanova results
                 max_fg_bg_nbr_ratio=max_fg_bg_nbr_ratio,
                 target_bg_nbrs=target_bg_nbrs,
             )
-            #if 2:
-            #    print('using rescaled evalues!')
-            #    pvals['evalue'] = pvals.rescaled_evalue
             pvals = pvals.join(tcrs['count v j cdr3nt cdr3aa'.split()].reset_index(),
                                on='tcr_index')
             pvals = pvals.sort_values('evalue').drop_duplicates(['v','j','cdr3aa'])
@@ -607,7 +527,7 @@ if 0: # look at the emerson A*02:01 repertoire results; also britanova results
             pvals['hipid'] = hipid
             dfl.append(pvals)
 
-        #tmp
+        # make tmp results for tracking...
         if dfl:
             pd.concat(dfl).to_csv(outfile, sep='\t', index=False)
 
@@ -620,7 +540,7 @@ if 0: # look at the emerson A*02:01 repertoire results; also britanova results
     exit()
 
 
-if 0: # look at current favorite background model, seems to make too few 0-N cdr3s
+if 0: # testing mods to current favorite background model
     import tcrdist
     from tcrdist.tcr_sampler import parse_tcr_junctions, resample_shuffled_tcr_chains
 
