@@ -152,7 +152,59 @@ def compute_nbr_counts_flat(fg_vecs, bg_vecs, radius):
 
 #####################################
 
-if 1: # simple test of hypergeom pvals on random repertoires
+if 0: # clean igor tcrs
+    # in the end, this just removed 155 short cdr3s
+    fname = 'data/phil/big_background.tsv'
+    new_fname = 'data/phil/big_background_filt.tsv'
+
+    tcrs = pd.read_table(fname).rename(
+        columns={'junction':'cdr3nt', 'junction_aa':'cdr3aa',
+                 'v_call':'v', 'j_call':'j'})
+
+    v_column, j_column, cdr3_column, organism, chain = 'v','j','cdr3aa','human','B'
+    tcrs = filter_out_bad_genes_and_cdr3s(
+        tcrs, v_column, cdr3_column, organism, chain, j_column=j_column)
+    print('num_tcrs:', tcrs.shape[0], fname)
+    tcrs.to_csv(new_fname, sep='\t', index=False)
+    print('made:', new_fname)
+    exit()
+
+
+if 0: # plot pval test
+    import seaborn as sns
+
+    df = pd.read_table('pvaltest_100000_1000000_24.5_100.tsv')
+
+    fg_size = 1e5
+
+    plt.figure()
+    colname = 'num_pvalues_lt_threshold'
+    df[colname] = np.log10(1+df.num_better)
+    sns.boxplot(data=df, x='threshold', y=colname, color='gray')
+    locs = plt.xticks()[0]
+
+    num_w_nbrs = df.num_with_ge_1_nbr.mean()
+    thresholds = np.sort(df.threshold.unique())
+    exp_vals_hi = np.log10(1+fg_size*thresholds)
+    exp_vals_lo = np.log10(1+num_w_nbrs*thresholds)
+    plt.plot(locs, exp_vals_hi, ':r', label='expected based on fg size')
+    plt.plot(locs, exp_vals_lo, ':g', label='expected based on num tcrs w/ any fg nbrs')
+    plt.legend()
+    locs = np.array([0, 1, 10, 100, 1000, 10000])
+    labels = [str(x) for x in locs]
+    locs = np.log10(1+locs)
+    # locs =plt.yticks()[0]
+    # labels = [f'{10**x - 1:.2f}' for x in locs]
+    plt.yticks(locs, labels)
+    plt.xlabel('Hypergeometric P-value threshold')
+    plt.title('fg_size= 1e5, bg_size= 1e6, radius= 24.5, num_repeats= 100\n'
+              'aa_mds_dim= 8, fg and bg drawn from IGOR-sampled repertoire',
+              fontsize=10)
+    plt.tight_layout()
+    plt.savefig('/home/pbradley/csdat/raptcr/tmp.png')
+    exit()
+
+if 0: # simple test of hypergeom pvals on random repertoires
 
     fname = 'data/phil/big_background_2e6.tsv'
     #fname = 'data/phil/big_background_1e6.tsv'
@@ -161,7 +213,7 @@ if 1: # simple test of hypergeom pvals on random repertoires
         columns={'junction':'cdr3nt', 'junction_aa':'cdr3aa',
                  'v_call':'v', 'j_call':'j'})
 
-    num_repeats = 20
+    num_repeats = 100
 
     fg_size = 100000
     bg_size = 1000000
@@ -169,7 +221,7 @@ if 1: # simple test of hypergeom pvals on random repertoires
 
     outfile = f'pvaltest_{fg_size}_{bg_size}_{radius:.1f}_{num_repeats}.tsv'
 
-    thresholds = [1e-5, 1e-4, 1e-3, 1e-2, 1e-1]
+    thresholds = [1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1]
 
     dfl = []
     for r in range(num_repeats):
@@ -213,7 +265,8 @@ if 1: # simple test of hypergeom pvals on random repertoires
             dfl.append(dict(
                 threshold=t,
                 num_better=count,
-                expected_num_better=np.round(fg_size*t, 3),
+                expected_num_better=fg_size*t,
+                num_with_ge_1_nbr=mask.sum(),
                 repeat=r,
                 fg_size=fg_size,
                 bg_size=bg_size,
@@ -227,7 +280,7 @@ if 1: # simple test of hypergeom pvals on random repertoires
 
 
 
-if 1: # miscellaneous code for visualizing the top significant tcrs in the emerson set
+if 0: # miscellaneous code for visualizing the top significant tcrs in the emerson set
     from scipy.stats import hypergeom
     import faiss
 
@@ -1064,7 +1117,7 @@ if 0: # look at nbr counts in YFV data
     exit()
 
 
-if 0: # look at nbr counts in the britanova set
+if 1: # look at nbr counts in the britanova set
     #old_ftags = get_original_18_ftags()
     #print(old_ftags)
     #exit()
@@ -1087,7 +1140,7 @@ if 0: # look at nbr counts in the britanova set
     #fg_files = fg_files[:5]
 
     radius = 12.5
-    bgnum = 5
+    bgnum = 7
     max_evalue = 10 #0.1
     #max_evalue = 0.1
     num_lines = 50
@@ -1101,10 +1154,10 @@ if 0: # look at nbr counts in the britanova set
                f'run4run5_pvals_F{len(fg_files)}_{radius:.1f}_bg{bgnum}_'
                f'tbn{target_bg_nbrs}.png')
 
-    run4prefix = '/home/pbradley/csdat/raptcr/slurm/run4/run4' # bg 0-4
-    run5prefix = '/home/pbradley/csdat/raptcr/slurm/run5/run5'
-    run8prefix = '/home/pbradley/csdat/raptcr/slurm/run8/run8' # bg 5
-    run16prefix = '/home/pbradley/csdat/raptcr/slurm/run16/run16' # bg 6
+    # this is very silly:
+    run4prefix = '/home/pbradley/csdat/raptcr/slurm/run4/run4' # for fg vs fg
+    run5prefix = '/home/pbradley/csdat/raptcr/slurm/run5/run5' # fg vs cord blood
+    bg_runtags = {0:4, 1:4, 2:4, 3:4, 4:4, 5:8, 6:16, 7:19}
 
     # read the rep sizes
     print('reading all rep sizes')
@@ -1128,11 +1181,12 @@ if 0: # look at nbr counts in the britanova set
 
         # read bg counts, compute pvals
         all_bg_counts = {}
-        for bg in range(7):
-            print('reading bg counts:', bg)
+        for bg in range(8):
+            print('reading bg counts:', bg, flush=True)
             bg_counts = np.zeros((num_tcrs,))
             for r in range(10):
-                prefix = run16prefix if bg == 6 else run8prefix if bg==5 else run4prefix
+                rt = 'run'+str(bg_runtags[bg])
+                prefix = f'/home/pbradley/csdat/raptcr/slurm/{rt}/{rt}'
                 bg_counts += np.load(f'{prefix}_{fg_tag}_{radius:.1f}_r{r}_bg_'
                                      f'{bg}_nbr_counts.npy')
             all_bg_counts[bg] = bg_counts
@@ -1176,7 +1230,7 @@ if 0: # look at nbr counts in the britanova set
             num_cells = sum(tcrs[same_tcr_mask]['count'])
             obs = fg_counts[ind]
             msg= f'eval: {l.evalue:9.2e} {obs:3d} {l.expected_nbrs:5.1f} bg% '
-            for bg in range(7):
+            for bg in range(8):
                 expect = all_bg_counts[bg][ind] / 10.
                 msg += f' {100*expect/obs:3.0f}'
             msg += '  fg% '
@@ -1417,25 +1471,26 @@ if 0: # setup for big calc
     radii = [12.5, 18.5, 24.5]
     #radii = [3.5, 6.5, 12.5, 18.5, 24.5]
     num_repeats = 10
-    bg_nums = [6]
+    bg_nums = [7]
     #bg_nums = [4,5]
 
-    fnames = glob('/home/pbradley/csdat/raptcr/emerson/*reparsed.tsv')
-    assert len(fnames) == 666
-    old_fnames = set(get_emerson_files_for_allele('A*02:01'))
-    fnames = [x for x in fnames if x not in old_fnames]
-    assert len(fnames) == 666 - 268
+    # fnames = glob('/home/pbradley/csdat/raptcr/emerson/*reparsed.tsv')
+    # assert len(fnames) == 666
+    # old_fnames = set(get_emerson_files_for_allele('A*02:01'))
+    # fnames = [x for x in fnames if x not in old_fnames]
+    # assert len(fnames) == 666 - 268
     # fnames = get_emerson_files_for_allele('A*02:01')
 
     # fnames = glob('/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
     #               '??_0_*min_count_2.txt.gz') ; assert len(fnames) == 12
     # fnames = glob('/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
     #               '*min_count_2.txt.gz')
-    # fnames = glob('/home/pbradley/gitrepos/immune_response_detection/'
-    #               'data/phil/britanova/A*gz')
+    fnames = glob('/home/pbradley/gitrepos/immune_response_detection/'
+                  'data/phil/britanova/A*gz')
     print(len(fnames))
 
-    runtag = 'run18' ; xargs = ' --max_tcrs 500000 ' # emerson, A*02:01-/unk donors
+    runtag = 'run19' ; xargs = ' --max_tcrs 500000 ' # britanova, bg_nums=[7]
+    #runtag = 'run18' ; xargs = ' --max_tcrs 500000 ' # emerson, A*02:01-/unk donors
     #runtag = 'run17' ; xargs = ' --max_tcrs 500000 ' # emerson, A*02:01+ donors
     #runtag = 'run16' ; xargs = ' --max_tcrs 500000 ' # britanova, bg_nums=[4,6]
     #runtag = 'run13' ; xargs = ' --max_tcrs 500000 ' # yfv day 0

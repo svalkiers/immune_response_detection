@@ -797,3 +797,31 @@ def resample_background_tcrs_v4(organism, chain, junctions):
 
     return [x[:4] for x in good_resamples]
     #return fg_ncounts, bg_ncounts, all_ncounts
+
+
+def sample_igor_tcrs(
+        num,
+        v_column='v',
+        j_column='j',
+        cdr3aa_column='cdr3aa',
+        cdr3nt_column='cdr3nt',
+        random_state=None,
+):
+    tag = ('_1e5' if num <= 1e5 else
+           '_5e5' if num <= 5e5 else
+           '_1e6' if num <= 1e6 else
+           '_2e6' if num <= 2e6 else
+           '')
+    fname = ('/home/pbradley/gitrepos/immune_response_detection/data/phil/'
+             f'big_background_filt{tag}.tsv')
+    print('reading:', fname)
+    tcrs = pd.read_table(fname)
+    assert tcrs.shape[0] >= num
+
+    return tcrs.sample(num, random_state=random_state).rename(columns={
+        'cdr3nt':cdr3nt_column,
+        'cdr3aa':cdr3aa_column,
+        'v':v_column,
+        'j':j_column,
+    })
+
