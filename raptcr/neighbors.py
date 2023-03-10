@@ -4,6 +4,7 @@ import parmap
 import faiss
 import time
 import json
+import os
 
 from scipy.stats import hypergeom
 from multiprocessing import Pool, cpu_count
@@ -99,6 +100,9 @@ class NeighborEnrichment():
         self.rsize = len(repertoire)
         self.r = radius
 
+        self.nbr_counts = None
+        self.bg_index = None
+
         self.hasher.fit()
 
         # if ncpus == -1: # if set to -1, use all CPUs
@@ -133,6 +137,13 @@ class NeighborEnrichment():
         self.nbr_counts = index_neighbors(query=self.repertoire, index=self.fg_index, r=self.r)
 
     def _setup_background_index(self, depth, exhaustive=True):
+        '''
+        Set up the background index by sampling from a large synthetic
+        (OLGA-generated) repertoire.
+
+        TO BE ADDED:
+            - Shuffled repertoire method (see code Phil)
+        '''
         if self.bg_index is None:
             bg = match_vj_distribution(n=depth, foreground=self.repertoire)
             if exhaustive:
@@ -145,6 +156,10 @@ class NeighborEnrichment():
             pass
 
     def _prefilter(self, k):
+        '''
+        Filter out all foreground TCRs whose neighbor count is less than
+        or equal to the background neighbor count.
+        '''
         # Prepare prefilter index
         prefilter_index = IvfIndex(hasher=self.hasher, n_centroids=k, n_probe=5)
         bg = match_vj_distribution(n=self.rsize, foreground=self.repertoire)
@@ -161,11 +176,13 @@ class NeighborEnrichment():
         return filtered
 
     def _hypergeometric(self, fg_nbrs, bg_nbrs):
-
+        '''
+        Compute p-values for based on foreground and background neighbor counts
+        using the hypergeometric distribution.
+        '''
         col_remap = {'neighbors_x':'foreground_neighbors', 'neighbors_y':'background_neighbors'}
         merged = fg_nbrs.merge(bg_nbrs, on=['v_call', 'junction_aa'])
         merged = merged.rename(columns=col_remap)
-
         # Hypergeometric testing
         M = len(self.bg_index.ids) + self.rsize
         N = self.rsize
@@ -178,18 +195,67 @@ class NeighborEnrichment():
         return merged.sort_values(by='pval')
 
     def foreground_neighbors_to_json(self, file):
-        json_string = json(self.nbr_counts)
+        '''
+        Dump foreground neighbor dictionary to json file.
+        '''
+        json_string = json.dumps(self.nbr_counts)
         f = open(file,"w")
         f.write(json_string)
         f.close()
 
     def foreground_neighbors_from_json(self, file):
+        '''
+        Load foreground neighbor dictionary from json file.
+        '''
         with open(file) as json_file:
             self.nbr_counts = json.load(json_file)
 
-    def dump_background_index(self, file):
-        assert bg_index is not None, "No background index found."
-        faiss.write_index(self.bg_index, file)
+    def dump_background_index_to_file(self, name):
+        '''
+        Write the contents of an index to disk. This function
+        will create a new folder containing one binary file
+        that stores the faiss index, and one file that stores
+        the TCR sequence ids.
+
+        Parameters
+        ----------
+        name: str
+            Name of the folder to dump the files.
+        '''
+        assert self.bg_index is not None, "No background index found."
+        os.mkdir(name)
+        json_string = json.dumps(self.bg_index.ids)
+        faiss.write_index(self.bg_index.idx, os.path.join(name,'index.bin'))
+        f = open(os.path.join(name,'ids.json'),"w")
+        f.write(json_string)
+        f.close()
+
+    def load_background_index_from_file(self, name:str, exhaustive:bool=True):
+        '''
+        Load a background index that is saved on disk.
+
+        Parameters
+        ----------
+        name: str
+            Name of the folder containing the files necessary for
+            setting up an index (ids and faiss index).
+        exhaustive: bool
+            When True, use the exact IndexFlatL2, otherwise
+            resort to the approximate IndevIVFFlat.
+        '''
+        faiss_index = faiss.read_index(os.path.join(name,"index.bin"))
+        with open(os.path.join(name,"ids.json")) as json_file:
+            index_ids = json.load(json_file)
+        if exhaustive:
+            self.bg_index = FlatIndex(hasher=self.hasher)
+            self.bg_index.idx = faiss_index
+            self.bg_index.ids = index_ids
+        else:
+            k = int(self.repertoire)/10
+            n = int(k/10)
+            self.bg_index = IvfIndex(hasher=self.hasher, n_centroids=k, n_probe=n)
+            self.bg_index.idx = faiss_index
+            self.bg_index.ids = index_ids
 
     def compute_pvalues(self, prefilter=True, ratio=10, fdr=1, exhaustive=False):
         '''
