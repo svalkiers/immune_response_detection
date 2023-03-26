@@ -221,6 +221,7 @@ def find_alternate_alleles_for_tcrs(
         min_better_count=5,
         min_improvement_to_be_called_better=2,
         verbose=False,
+        very_verbose=False,
         ):
     ''' Try looking for cases where an alternate allele explains more of the cdr3_nucseq
     than the current allele (which is probably *01 since 10x usually doesn't provide alleles)
@@ -267,7 +268,8 @@ def find_alternate_alleles_for_tcrs(
             new_tcr.append((v, j, cdr3, cdr3_nucseq))
         new_tcr = tuple(new_tcr)
         if new_tcr != paired_tcr:
-            if verbose:
+            if very_verbose:
+                print('find_alternate_alleles_for_tcrs: old_tcr:', paired_tcr)
                 print('find_alternate_alleles_for_tcrs: new_tcr:', new_tcr)
         new_tcrs.append(new_tcr)
     return new_tcrs

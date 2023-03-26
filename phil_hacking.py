@@ -1,5 +1,6 @@
 ######################################################################################88
 import raptcr
+import itertools as it
 from raptcr.constants.hashing import BLOSUM_62
 from raptcr.constants.base import AALPHABET
 import numpy as np
@@ -17,7 +18,13 @@ import random
 
 from phil_functions import *
 
-#MAIN = __name__ == '__main__'
+pd.set_option('display.max_rows', 500)
+pd.set_option('display.max_columns', 500)
+pd.set_option('display.max_colwidth', 100)
+pd.set_option('display.width', 110)
+#pd.set_option('display.width', 167)
+
+
 
 ## testing new functions:
 
@@ -106,6 +113,8 @@ def get_emerson_files_for_allele(allele):
 
 
 def compute_leiden_clusters_from_vecs(vecs, num_nbrs=5, random_seed=20):
+    ''' Convenience wrapper around leiden clustering
+    '''
     import leidenalg
     import igraph as ig
     from scipy.spatial.distance import squareform, pdist
@@ -137,6 +146,8 @@ def compute_leiden_clusters_from_vecs(vecs, num_nbrs=5, random_seed=20):
     return leiden_clusters
 
 def compute_nbr_counts_flat(fg_vecs, bg_vecs, radius):
+    ''' Convenience wrapper around neighbor counts calc
+    '''
     assert fg_vecs.shape[1] == bg_vecs.shape[1]
     import faiss
     idx = faiss.IndexFlatL2(fg_vecs.shape[1])
@@ -149,8 +160,1118 @@ def compute_nbr_counts_flat(fg_vecs, bg_vecs, radius):
     return nbr_counts
 
 
+def read_yfv_expanded_clones():
+    xclones = pd.read_table(
+        '/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/yfv_expanded_clones.tsv')
+    xclones.rename(columns={
+        'CDR3.nucleotide.sequence':'cdr3nt',
+        'bestVGene':'v',
+        'bestJGene':'j',
+        'CDR3.amino.acid.sequence':'cdr3aa',
+        }, inplace=True)
+    xclones['v'] = xclones.v+'*01'
+    xclones['j'] = xclones.j+'*01'
+    xclones['cdr3nt'] = xclones.cdr3nt.str.lower()
+    v_column, j_column, cdr3_column, organism, chain = 'v','j','cdr3aa','human','B'
+    xclones = filter_out_bad_genes_and_cdr3s(
+        xclones, v_column, cdr3_column, organism, chain, j_column=j_column)
+    print('num_xclones:', xclones.shape[0])
+    return xclones
 
-#####################################
+
+def read_yfv_alice_hits(min_count=2):
+    fname = '/home/pbradley/csdat/raptcr/yfv/Pogorelyy_hits.tsv'
+    tcrs = pd.read_table(fname)
+
+    tcrs.rename(columns={
+        'CDR3.nucleotide.sequence':'cdr3nt',
+        'CDR3.amino.acid.sequence':'cdr3aa',
+        'bestVGene':'v',
+        'bestJGene':'j',
+        'Read.count':'count',
+        'donor':'sample_tag',
+        }, inplace=True)
+    tcrs['v'] = tcrs.v+'*01'
+    tcrs['j'] = tcrs.j+'*01'
+    tcrs['donor'] = tcrs.sample_tag.str.split('_').str.get(0)
+    tcrs['timepoint'] = tcrs.sample_tag.str.split('_').str.get(1).astype(int)
+    assert all(tcrs.sample_tag.str.split('_').str.get(2)=='F1')
+    tcrs['cdr3nt'] = tcrs.cdr3nt.str.lower()
+    v_column, j_column, cdr3_column, organism, chain = 'v','j','cdr3aa','human','B'
+    tcrs = filter_out_bad_genes_and_cdr3s(
+        tcrs, v_column, cdr3_column, organism, chain, j_column=j_column)
+    print('num ALICE hits:', tcrs.shape[0])
+    #['donor', 'count', 'Read.proportion', 'cdr3nt', 'cdr3aa', 'v', 'j', 'D',
+    # 'total_n', 'space', 'space_n', 'q', 'p_val']
+    outcols = 'sample_tag donor timepoint count v j cdr3aa cdr3nt p_val'.split()
+    return tcrs[tcrs['count']>=min_count][outcols]
+
+
+
+def read_paired_data(fname):
+    ''' updates nucseq cols; filters bad genes, cdr3s
+    '''
+    print('reading:', fname)
+    tcrs = pd.read_table(fname)
+    tcrs['cdr3a_nucseq'] = tcrs.cdr3a_nucseq.str.lower()
+    tcrs['cdr3b_nucseq'] = tcrs.cdr3b_nucseq.str.lower()
+
+    organism = 'human'
+    tcrs = filter_out_bad_genes_and_cdr3s(
+        tcrs, 'va', 'cdr3a', organism, 'A', j_column='ja')
+    tcrs = filter_out_bad_genes_and_cdr3s(
+        tcrs, 'vb', 'cdr3b', organism, 'B', j_column='jb')
+    return tcrs
+
+######################################################################################88
+######################################################################################88
+######################################################################################88
+######################################################################################88
+######################################################################################88
+######################################################################################88
+
+
+if 1: # test background resampling functions
+
+    fname = ('/home/pbradley/gitrepos/immune_response_detection/'
+             'data/phil/britanova/A5-S18.txt.gz')
+
+    tcrs = read_britanova_tcrs(fname)
+    print('num_tcrs:', tcrs.shape[0])
+
+    start = timer()
+    junctions = parse_junctions_for_background_resampling(
+        tcrs, 'human', 'B', 'v', 'j', 'cdr3aa', 'cdr3nt')
+    print(f'parsing junctions took {timer()-start:.1f}s for {tcrs.shape[0]}')
+
+    start = timer()
+    bg_tcrs = resample_background_tcrs_v4('human', 'B', junctions)
+    print(f'resampling took {timer()-start:.1f}s for {tcrs.shape[0]}')
+
+    exit()
+
+if 0: # try neighborhood clustering of the clumping hits
+    import igraph as ig
+    import faiss
+
+    organism = 'human'
+    aa_mds_dim = 8
+
+    #leiden_radii = [24]
+    leiden_radii = [24,48,72,96]
+
+    min_group_size = 10
+
+    max_impurity = 0.2
+
+    evalue_threshold= 1.
+
+    classic2new_colmap = {
+        'clone_index':'tcr_index',
+        'pvalue_adj':'evalue',
+        'nbr_radius':'radius',
+    }
+
+
+    if 0:
+        fname = DATADIR+'phil/paired_sample_filt_clumping_pvals_run20_run21_evt_100.tsv'
+        CLASSIC = False
+    else:
+        fname = ('/home/pbradley/csdat/big_covid/'
+                 'big_combo_tcrs_2023-03-07_clumping_results_vjpair_nr1M_P100.tsv')
+        CLASSIC = True
+
+    lrtag = '_'.join(map(str,leiden_radii))
+    outfile = (f'{fname[:-4]}_r{lrtag}_evt_{evalue_threshold:.1f}_'
+               f'mi_{max_impurity:.3f}_nbrhood.tsv')
+
+
+    # 7e: max_impurity=0.2 ; classic clumping results
+    renamed_outfile = ('/home/pbradley/csdat/big_covid/'
+                       'big_combo_tcrs_2023-03-07e_gp4.tsv')
+
+    # 7d: max_impurity=0.2
+    # renamed_outfile = ('/home/pbradley/csdat/big_covid/'
+    #                    'big_combo_tcrs_2023-03-07d_gp4.tsv')
+
+    # 7c had no impurity threshold
+    # renamed_outfile = ('/home/pbradley/csdat/big_covid/'
+    #                    'big_combo_tcrs_2023-03-07c_gp4.tsv')
+
+    results = pd.read_table(fname)
+
+    if CLASSIC:
+        results.rename(columns=classic2new_colmap, inplace=True)
+
+    results['impurity'] = results.expected_num_nbrs / results.num_nbrs
+    print('start num tcrs:', len(results.tcr_index.unique()))
+    results = results[results.evalue <= evalue_threshold]
+    print('pval_thresh num tcrs:', len(results.tcr_index.unique()))
+    results = results[results.impurity <= max_impurity]
+    print('impurity_thresh num tcrs:', len(results.tcr_index.unique()))
+
+
+    tcrs = results.sort_values(['evalue','radius']).drop_duplicates('tcr_index')
+    tcr_index2tcrs_index = {x:i for i,x in enumerate(tcrs.tcr_index)}
+    results['tcrs_index'] = results.tcr_index.map(tcr_index2tcrs_index)
+
+    tcrs.reset_index(drop=True, inplace=True)
+
+    avecs = gapped_encode_tcr_chains(
+        tcrs, organism, 'A', aa_mds_dim, v_column='va',
+        cdr3_column='cdr3a').astype(np.float32)
+
+    bvecs = gapped_encode_tcr_chains(
+        tcrs, organism, 'B', aa_mds_dim, v_column='vb',
+        cdr3_column='cdr3b').astype(np.float32)
+
+    vecs = np.hstack([avecs, bvecs])
+
+    # create the graph
+    g = ig.Graph(directed=False) # undirected graph
+    num_tcrs = vecs.shape[0]
+    g.add_vertices(num_tcrs)
+
+    idx = faiss.IndexFlatL2(vecs.shape[1])
+    idx.add(vecs)
+
+    for radius in leiden_radii:
+        # which tcrs are significant at this radius?
+        inds = np.array(sorted(set(results[results.radius==radius].tcrs_index)))
+        #inds = np.nonzero(np.array(tcrs.radius==radius))[0]
+
+        start = timer()
+        print(f'radius {radius} num {inds.shape[0]} range search')
+        lims, D, I = idx.range_search(vecs[inds], radius + .5)
+        print(f'range_search took {timer()-start:.2f}')
+        print('total nbrs:', radius, I.shape, flush=True)
+        nnbrs = lims[1:]-lims[:-1]
+        I0 = np.repeat(inds, nnbrs.astype(int))
+        start = timer()
+        assert I0.shape == I.shape
+        g.add_edges(list(zip(I0,I)))
+        # for ii, (start, stop) in enumerate(zip(lims[:-1], lims[1:])):
+        #     g.add_edges(list(zip(it.repeat(inds[ii]), I[start:stop])))
+        print(f'add nbrs took {timer()-start:.2f}', flush=True)
+
+
+    # iteratively find the highest-degee vertex and remove it and its nbrs
+    # these are the groups
+    NOGROUP = -1
+    group_numbers = np.full((num_tcrs,), NOGROUP, dtype=int)
+    vertex2tcr = list(range(num_tcrs)) # map from graph vertices to tcr numbers
+    centers = []
+    while True:
+        assert len(vertex2tcr) == g.vcount()
+        degreelist = g.degree()
+        center = np.argmax(degreelist)
+        nbrs = sorted(set(g.neighbors(center)))
+        assert center in nbrs
+        print(g.vcount(), center, degreelist[center], g.maxdegree(), len(nbrs))
+        tcr_nbrs = [vertex2tcr[x] for x in nbrs]
+        tcr_center = vertex2tcr[center]
+        assert np.all(group_numbers[tcr_nbrs]==NOGROUP)
+        group_numbers[tcr_nbrs] = len(centers)
+        centers.append(tcr_center)
+        g.delete_vertices(nbrs)
+        for v in sorted(nbrs, reverse=True):
+            vertex2tcr.pop(v)
+        if g.vcount()==0:
+            break
+        if g.maxdegree()+1 < min_group_size:
+            break
+
+    mask = group_numbers==NOGROUP
+    if mask.sum():
+        next_group = max(group_numbers)+1
+        group_numbers[mask] = np.arange(next_group, next_group+mask.sum())
+
+    assert group_numbers.shape[0] == tcrs.shape[0]
+
+    tcr_index2clumping_group = dict(zip(tcrs.tcr_index, group_numbers))
+
+    results['clumping_group'] = results.tcr_index.map(tcr_index2clumping_group)
+
+    results.to_csv(outfile, sep='\t', index=False)
+    print('made:', outfile)
+
+
+    ## now create a renamed version for compatibility with the big_covid.py pipeline:
+    #
+    #head -1 big_combo_tcrs_2023-03-07_clumping_results_vjpair_nr1M_P100.tsv
+    #clump_type	clone_index	nbr_radius	pvalue_adj	num_nbrs	expected_num_nbrs	raw_count	va	ja	cdr3a	vb	jb	cdr3b	clonotype_fdr_value	clumping_group
+
+    #head -1 ~/gitrepos/immune_response_detection/data/phil/paired_sample_filt_clumping_pvals_run20_run21_evt_100.tsv
+    #evalue	tcr_index	radius	num_nbrs	expected_num_nbrs	bg_nbrs	va	ja	cdr3a	cdr3a_nucseq	vb	jb	cdr3b	cdr3b_nucseq	cohort
+    if not CLASSIC:
+        results['clump_type'] = 'global'
+        results.drop(columns=['cdr3a_nucseq','cdr3b_nucseq'], inplace=True)
+
+    results.rename(columns={y:x for x,y in classic2new_colmap.items()}, inplace=True)
+    results.to_csv(renamed_outfile, sep='\t', index=False)
+    print('made:', renamed_outfile)
+
+
+
+    exit()
+
+
+if 0: # try single-linkage clustering of the clumping hits
+    import igraph as ig
+    import faiss
+
+    organism = 'human'
+    aa_mds_dim = 8
+
+    #leiden_radii = [24]
+    leiden_radii = [24,48,72,96]
+
+    threshold= 1.
+    fname = DATADIR+'phil/paired_sample_filt_clumping_pvals_run20_run21_evt_100.tsv'
+    lrtag = '_'.join(map(str,leiden_radii))
+    outfile = f'{fname[:-4]}_r{lrtag}_single.tsv'
+
+
+    # use 2023-03-07b !!!
+    renamed_outfile = ('/home/pbradley/csdat/big_covid/big_combo_tcrs_2023-03-07b_'
+                       'clumping_results_vjpair_nr1M_P100.tsv')
+
+    results = pd.read_table(fname)
+    results = results[results.evalue <= threshold]
+
+    tcrs = results.sort_values(['evalue','radius']).drop_duplicates('tcr_index')
+    tcr_index2tcrs_index = {x:i for i,x in enumerate(tcrs.tcr_index)}
+    results['tcrs_index'] = results.tcr_index.map(tcr_index2tcrs_index)
+
+    tcrs.reset_index(drop=True, inplace=True)
+
+    avecs = gapped_encode_tcr_chains(
+        tcrs, organism, 'A', aa_mds_dim, v_column='va',
+        cdr3_column='cdr3a').astype(np.float32)
+
+    bvecs = gapped_encode_tcr_chains(
+        tcrs, organism, 'B', aa_mds_dim, v_column='vb',
+        cdr3_column='cdr3b').astype(np.float32)
+
+    vecs = np.hstack([avecs, bvecs])
+
+    # create the graph
+    g = ig.Graph(directed=False) # undirected graph
+    g.add_vertices(vecs.shape[0])
+
+
+    idx = faiss.IndexFlatL2(vecs.shape[1])
+    idx.add(vecs)
+
+    for radius in leiden_radii:
+        # which tcrs are significant at this radius?
+        inds = np.array(sorted(set(results[results.radius==radius].tcrs_index)))
+        #inds = np.nonzero(np.array(tcrs.radius==radius))[0]
+
+        start = timer()
+        print(f'radius {radius} num {inds.shape[0]} range search')
+        lims, D, I = idx.range_search(vecs[inds], radius + .5)
+        print(f'range_search took {timer()-start:.2f}')
+        print('total nbrs:', radius, I.shape, flush=True)
+        nnbrs = lims[1:]-lims[:-1]
+        I0 = np.repeat(inds, nnbrs.astype(int))
+        start = timer()
+        assert I0.shape == I.shape
+        g.add_edges(list(zip(I0,I)))
+        # for ii, (start, stop) in enumerate(zip(lims[:-1], lims[1:])):
+        #     g.add_edges(list(zip(it.repeat(inds[ii]), I[start:stop])))
+        print(f'add nbrs took {timer()-start:.2f}', flush=True)
+
+    comps = g.connected_components() # mode=weak or strong is ignored for undirect graph
+    assert len(comps.membership) == tcrs.shape[0]
+
+    # rename by size order
+    sizes = Counter(comps.membership)
+    old2new = {g:ii for ii,(g,_) in enumerate(sizes.most_common())}
+
+    tcr_index2clumping_group = dict(zip(
+        tcrs.tcr_index, [old2new[x] for x in comps.membership]))
+
+    results['clumping_group'] = results.tcr_index.map(tcr_index2clumping_group)
+
+    results.to_csv(outfile, sep='\t', index=False)
+    print('made:', outfile)
+
+
+    ## now create a renamed version for compatibility with the big_covid.py pipeline:
+    #
+    #head -1 big_combo_tcrs_2023-03-07_clumping_results_vjpair_nr1M_P100.tsv
+    #clump_type	clone_index	nbr_radius	pvalue_adj	num_nbrs	expected_num_nbrs	raw_count	va	ja	cdr3a	vb	jb	cdr3b	clonotype_fdr_value	clumping_group
+
+    #head -1 ~/gitrepos/immune_response_detection/data/phil/paired_sample_filt_clumping_pvals_run20_run21_evt_100.tsv
+    #evalue	tcr_index	radius	num_nbrs	expected_num_nbrs	bg_nbrs	va	ja	cdr3a	cdr3a_nucseq	vb	jb	cdr3b	cdr3b_nucseq	cohort
+    results['clump_type'] = 'global'
+    results.drop(columns=['cdr3a_nucseq','cdr3b_nucseq'], inplace=True)
+    results.rename(columns={
+        'evalue':'pvalue_adj',
+        'tcr_index':'clone_index',
+        'radius':'nbr_radius'}, inplace=True)
+    results.to_csv(renamed_outfile, sep='\t', index=False)
+    print('made:', renamed_outfile)
+
+
+
+    exit()
+
+
+if 0:
+    fname = DATADIR+'phil/paired_sample_filt_clumping_pvals_run20_run21_evt_100_leidens_uniqtcrs.r24.tsv'
+
+    fname = DATADIR+'phil/paired_sample_filt_clumping_pvals_run20_run21_evt_100_r24_48_72_96_leidens_uniqtcrs.tsv'
+
+    tcrs = pd.read_table(fname)
+
+    for c in range(10):
+        mask = tcrs.leiden==c
+        if mask.sum()<20:
+            break
+        print('='*80)
+        print(mask.sum(), c)
+        print(tcrs[mask]['va cdr3a vb cdr3b cohort'.split()])
+        print(tcrs[mask].cohort.value_counts().head())
+
+
+
+    exit()
+
+
+if 0: # try leiden clustering of the clumping tcrs
+    import leidenalg
+    import igraph as ig
+    organism = 'human'
+    aa_mds_dim = 8
+
+    #leiden_radii = [24]
+    leiden_radii = [24,48,72,96]
+
+    threshold= 1.
+    fname = DATADIR+'phil/paired_sample_filt_clumping_pvals_run20_run21_evt_100.tsv'
+    lrtag = '_'.join(map(str,leiden_radii))
+    outfile = f'{fname[:-4]}_r{lrtag}_leidens.tsv'
+    df = pd.read_table(fname)
+    df = df[df.evalue <= threshold]
+
+    tcrs = df.sort_values(['evalue','radius']).drop_duplicates('tcr_index')
+
+    tcrs.reset_index(drop=True, inplace=True)
+
+    avecs = gapped_encode_tcr_chains(
+        tcrs, organism, 'A', aa_mds_dim, v_column='va',
+        cdr3_column='cdr3a').astype(np.float32)
+
+    bvecs = gapped_encode_tcr_chains(
+        tcrs, organism, 'B', aa_mds_dim, v_column='vb',
+        cdr3_column='cdr3b').astype(np.float32)
+
+    vecs = np.hstack([avecs, bvecs])
+
+    # create the graph
+    g = ig.Graph(directed=True)
+    g.add_vertices(vecs.shape[0])
+
+
+    idx = faiss.IndexFlatL2(vecs.shape[1])
+    idx.add(vecs)
+
+    for radius in leiden_radii:
+        inds = np.nonzero(np.array(tcrs.radius==radius))[0]
+
+        start = timer()
+        print(f'radius {radius} num {inds.shape[0]} range search')
+        lims, D, I = idx.range_search(vecs[inds], radius + .5)
+        print(f'range_search took {timer()-start:.2f}')
+        print('total nbrs:', radius, I.shape, flush=True)
+        nnbrs = lims[1:]-lims[:-1]
+        I0 = np.repeat(inds, nnbrs.astype(int))
+        stime = timer()
+        assert I0.shape == I.shape
+        g.add_edges(list(zip(I0,I)))
+        # for ii, (start, stop) in enumerate(zip(lims[:-1], lims[1:])):
+        #     g.add_edges(list(zip(it.repeat(inds[ii]), I[start:stop])))
+        print(f'add nbrs took {timer()-stime:.2f}', flush=True)
+
+    partition_type = leidenalg.RBConfigurationVertexPartition
+    print('leiden')
+    start = timer()
+    part = leidenalg.find_partition(g, partition_type, seed=11)#random_seed)
+    print(f'DONE leiden {timer()-start:.2f}')
+
+    leiden_clusters = np.array(part.membership)
+
+    tcrs['leiden'] = leiden_clusters
+
+    df = df.join(tcrs.set_index('tcr_index')['leiden'], on='tcr_index')
+    df.to_csv(outfile, sep='\t', index=False)
+    print('made:', outfile)
+
+    tcrs.to_csv(outfile[:-4]+'_uniqtcrs.tsv', sep='\t', index=False)
+
+    exit()
+
+
+if 0: # find cohorts with highest density of clumping hits
+    threshold= 1.
+    fname = DATADIR+'phil/paired_sample_filt_clumping_pvals_run20_run21_evt_100.tsv'
+
+    df = pd.read_table(fname)
+    df = df[df.evalue <= threshold]
+
+    print('reading tcrs')
+    tcrs = pd.read_table(f'{DATADIR}phil/paired_sample_filt.tsv')
+    cohort_counts = tcrs.cohort.value_counts()
+    print('cohort_counts:', cohort_counts.head())
+    #df = df.join(tcrs, on='tcr_index')
+
+    cohort_hits = df.drop_duplicates('tcr_index').cohort.value_counts()
+
+    l = []
+    for cohort, num in cohort_hits.items():
+        rate = num / cohort_counts[cohort]
+        l.append((rate, cohort))
+
+    for (rate, cohort) in sorted(l, reverse=True):
+        print(f'{100*rate:7.3f}% {cohort_hits[cohort]:5d} {cohort_counts[cohort]:6d}',
+              cohort)
+
+
+
+
+    exit()
+
+if 0: # read the results of the paired tcr clumping calcs
+    from scipy.stats import poisson
+
+    # fg range search info:
+    njobs = 310
+    jobsize = 10000
+    num_bg_tcrs = 250000
+    maxdist = 96
+    radii = [24, 48, 72, 96]
+    num_fg_tcrs = 3097957  # in fg_filename
+    ab_veclen = 568
+    min_nbrs = 2 # tcr_clumping uses 1?
+    pseudocount = 0.25
+    fg_runtag = 'run20' # range_search with fg_vecs
+    bg_runtag = 'run21' # single-chain matching to bg a+b vecs
+    evalue_threshold = 100
+
+    fg_filename = f'{DATADIR}phil/paired_sample_filt.tsv'
+
+    print('reading:', fg_filename)
+    tcrs = pd.read_table(fg_filename)
+    assert tcrs.shape[0] == num_fg_tcrs
+
+    outfile = (f'{fg_filename[:-4]}_clumping_pvals_{fg_runtag}_{bg_runtag}_'
+               f'evt_{evalue_threshold}.tsv')
+
+    def load_bg_counts(jobno, runtag=bg_runtag):
+        ''' Returns array (rcounts) of size (ntcrs, len(radii))
+        with the summed counts up to and including each radius value
+        '''
+        fname = (f'/home/pbradley/csdat/raptcr/slurm/{runtag}/'
+                 f'{runtag}_{jobno}_{jobno*jobsize}_{(jobno+1)*jobsize}_'
+                 f'{num_bg_tcrs}_ab_counts.npy')
+        counts = np.load(fname)
+        ntcrs = counts.shape[0]
+        assert counts.shape[1] == maxdist+1
+        assert jobno == njobs-1 or ntcrs == jobsize
+        rcounts = np.cumsum(counts, axis=1)[:, radii]
+        return rcounts
+
+    def load_fg_counts(jobno, runtag=fg_runtag):
+        actual_jobsize = jobsize if jobno<njobs-1 else num_fg_tcrs%jobsize
+        prefix = (f'/home/pbradley/csdat/raptcr/slurm/{runtag}/'
+                  f'{runtag}_{jobno}_{maxdist+0.5:.1f}_{actual_jobsize}_{num_fg_tcrs}_'
+                  f'{ab_veclen}_')
+        #fname = run20_23_96.5_10000_3097957_568_D.npy
+        lims = np.load(prefix+'lims.npy')
+        D = np.load(prefix+'D.npy')
+        #I = np.load(prefix+'I.npy')
+
+        ntcrs = lims.shape[0]-1
+        assert ntcrs==jobsize or jobno==njobs-1
+
+        rcounts = np.zeros((ntcrs, len(radii)), dtype=int)
+        for ii, r in enumerate(radii):
+            rcounts[:,ii] = np.add.reduceat((D<=r+.5), lims[:-1].astype(int))
+        return rcounts
+
+
+    dfl = []
+    for jobno in range(njobs):
+        startnum = len(dfl)
+
+        fg_counts = load_fg_counts(jobno) - 1 # exclude self nbrs
+        bg_counts = load_bg_counts(jobno)
+
+        rates = (np.maximum(bg_counts, pseudocount) *
+                 (num_fg_tcrs/(num_bg_tcrs*num_bg_tcrs)))
+
+        for ii, (counts,rates) in enumerate(zip(fg_counts, rates)):
+            for jj, (count,rate) in enumerate(zip(counts,rates)):
+                if count >= min_nbrs:
+                    pval = poisson.sf(count-1, rate)
+                    pval *= len(radii)*num_fg_tcrs
+                    if pval <= evalue_threshold:
+                        dfl.append(dict(
+                            evalue=pval,
+                            tcr_index=ii+jobno*jobsize,
+                            radius=radii[jj],
+                            num_nbrs=count,
+                            expected_num_nbrs=rate,
+                            bg_nbrs=rate*num_bg_tcrs*num_bg_tcrs/num_fg_tcrs,
+                        ))
+        inds = sorted(set(x['tcr_index'] for x in dfl[startnum:]))
+        ccounts = Counter(tcrs.cohort.iloc[inds]).most_common(3)
+        ccountstring = ' '.join(f'{x}:{i}' for x,i in ccounts)
+        print(f'{jobno:3d} {len(dfl)-startnum:4d} {len(dfl)} {ccountstring}')
+    results = pd.DataFrame(dfl).join(tcrs, on='tcr_index')
+    results.to_csv(outfile, sep='\t', index=False)
+    print('made:', outfile)
+
+
+    exit()
+
+if 0: # experiment with faiss distances, for calculating the pairwise bg distns
+    # python timing, around 2.7 seconds:
+    #
+    # allocate memory 10000 50000
+    # start pairwise_L2sqr nq= 10000 nb= 50000 dim= 272
+    # finished: 2.62
+    #
+    # vs in C++ about the same (these are in milliseconds; see phil_hacking.cpp)
+    #
+    # rhino01 immune_response_detection$ ./a.out
+    # pairwise dists searching... 10000 x 50000
+    # DONE dists searching... 2569.433838
+    # rhino01 immune_response_detection$ ./a.out
+    # pairwise dists searching... 10000 x 50000
+    # DONE dists searching... 2558.998047
+
+    import faiss
+    from scipy.spatial.distance import cdist
+    from sklearn.metrics import pairwise_distances
+
+    nq = 10000
+    nb = 50000
+    dim = 272
+
+    xq = np.random.rand(nq, dim).astype(np.float32)
+    xb = np.random.rand(nb, dim).astype(np.float32)
+    print('allocate memory', nq, nb)
+    result = np.zeros((nq, nb), dtype=np.float32)
+
+    for r in range(5):
+        print(f'start pairwise_L2sqr nq= {nq} nb= {nb} dim= {dim}')
+        start = timer()
+        faiss.pairwise_L2sqr(dim, nq, faiss.swig_ptr(xq), nb, faiss.swig_ptr(xb),
+                             faiss.swig_ptr(result))
+        print(f'finished1: {timer()-start:.2f}', flush=True)
+
+        print(f'start pairwise_L2sqr nq= {nq} nb= {nb} dim= {dim}')
+        start = timer()
+        D = faiss.pairwise_distances(xq, xb)
+        print(f'finished1: {timer()-start:.2f}', flush=True)
+
+        print(f'start pairwise_distances nq= {nq} nb= {nb} dim= {dim}')
+        start = timer()
+        D = pairwise_distances(xq, xb)
+        print(f'finished2: {timer()-start:.2f}', flush=True)
+
+        print(f'start cdist nq= {nq} nb= {nb//10} dim= {dim}')
+        start = timer()
+        D = cdist(xq, xb[:nb//10])
+        print(f'finished3: {timer()-start:.2f}', flush=True)
+
+        print(f'start cdist nq= {nq} nb= {nb} dim= {dim}')
+        start = timer()
+        D = cdist(xq, xb)
+        print(f'finished4: {timer()-start:.2f}', flush=True)
+
+    exit()
+
+    results = '''
+In [105]: %run phil_hacking.py
+allocate memory 10000 50000
+start pairwise_L2sqr nq= 10000 nb= 50000 dim= 272
+finished: 2.60
+start pairwise_distances nq= 10000 nb= 50000 dim= 272
+finished: 7.80
+start cdist nq= 10000 nb= 5000 dim= 272
+finished: 5.63
+
+In [106]: %run phil_hacking.py
+allocate memory 10000 50000
+start pairwise_L2sqr nq= 10000 nb= 50000 dim= 272
+finished: 3.19
+start pairwise_distances nq= 10000 nb= 50000 dim= 272
+finished: 8.14
+start cdist nq= 10000 nb= 5000 dim= 272
+finished: 5.81
+
+In [107]: %run phil_hacking.py
+allocate memory 10000 50000
+start pairwise_L2sqr nq= 10000 nb= 50000 dim= 272
+finished: 2.97
+start pairwise_distances nq= 10000 nb= 50000 dim= 272
+finished: 8.22
+start cdist nq= 10000 nb= 5000 dim= 272
+finished: 5.70
+
+    older:
+
+In [96]: %run phil_hacking.py
+allocate memory 10000 50000
+start pairwise_L2sqr nq= 10000 nb= 50000 dim= 272
+finished: 3.27
+start cdist nq= 10000 nb= 50000 dim= 272
+finished: 399.98
+
+In [97]: %run phil_hacking.py
+allocate memory 10000 50000
+start pairwise_L2sqr nq= 10000 nb= 50000 dim= 272
+finished: 2.85
+start cdist nq= 10000 nb= 50000 dim= 272
+finished: 192.54
+
+
+    '''
+
+
+if 0: # setup for some background distn searches
+    PY = '/home/pbradley/miniconda3/envs/raptcr/bin/python'
+    EXE = '/home/pbradley/gitrepos/immune_response_detection/phil_running.py'
+
+    maxdist = 96
+    num_bg_tcrs = 250000
+    aa_mds_dim = 8
+    job_size = 10000
+    runtag = 'run21'
+    xargs = ' --sleeptime 30 '
+
+    fg_filename = f'{DATADIR}phil/paired_sample_filt.tsv'
+    bg_filename = f'{DATADIR}phil/paired_bg_tcrs_250000.tsv'
+
+    rundir = f'/home/pbradley/csdat/raptcr/slurm/{runtag}/'
+    if not exists(rundir):
+        mkdir(rundir)
+
+    cmds_file = f'{rundir}{runtag}_commands.txt'
+    assert not exists(cmds_file)
+    out = open(cmds_file,'w')
+
+    print('reading:', fg_filename)
+    tcrs = pd.read_table(fg_filename)
+    num_tcrs = tcrs.shape[0]
+
+    num_jobs = (num_tcrs-1)//job_size+1
+
+
+    for job in range(num_jobs):
+        start = job*job_size
+        stop = (job+1)*job_size
+
+        outfile = f'{rundir}{runtag}_{job}_{start}_{stop}_{num_bg_tcrs}_ab_counts.npy'
+        cmd = (f'{PY} {EXE} {xargs} --mode paired_backgrounds '
+               f' --fg_filename {fg_filename} --bg_filename {bg_filename} '
+               f' --maxdist {maxdist} --num_bg_tcrs {num_bg_tcrs} '
+               f' --start_index {start} --stop_index {stop} '
+               f' --aa_mds_dim {aa_mds_dim} '
+               f' --outfile {outfile} '
+               f' > {outfile[:-4]}.log 2> {outfile[:-4]}.err')
+        out.write(cmd+'\n')
+    out.close()
+    print('made:', cmds_file)
+    exit()
+
+
+if 0: # filter the tcrs from the round4 merged file
+    bigfile = '/home/pbradley/csdat/big_covid/round4_merged_common_genes_obs.tsv'
+    filtfile = f'{DATADIR}phil/round4_merged_filt.tsv'
+
+    print('reading:', bigfile)
+    tcrs = pd.read_table(bigfile)
+    old_num = tcrs.shape[0]
+    print('read:', old_num, bigfile)
+
+    tcrs['cell_index'] = tcrs.index
+    tcrs.rename(columns={tcrs.columns[0]:'barcode'}, inplace=True)
+
+    tcrs.sort_values(['cohort','tcr_string','clone_size'], ascending=False,
+                     inplace=True)
+    tcrs['clone_count'] = tcrs.groupby(['cohort','tcr_string']).cumcount()
+    mask = tcrs.clone_count==0
+
+    print('filter to clones:', old_num, mask.sum())
+    tcrs = tcrs[mask]
+
+    tcrs['cdr3a_nucseq'] = tcrs.cdr3a_nucseq.str.lower()
+    tcrs['cdr3b_nucseq'] = tcrs.cdr3b_nucseq.str.lower()
+    organism = 'human'
+    tcrs = filter_out_bad_genes_and_cdr3s(
+        tcrs, 'va', 'cdr3a', organism, 'A', j_column='ja')
+    tcrs = filter_out_bad_genes_and_cdr3s(
+        tcrs, 'vb', 'cdr3b', organism, 'B', j_column='jb')
+    tcrs.to_csv(filtfile, sep='\t', index=False)
+    print('made:', old_num, mask.sum(), tcrs.shape[0], filtfile)
+
+    exit()
+
+if 0: # setup for some range and knn searches
+    PY = '/home/pbradley/miniconda3/envs/raptcr/bin/python'
+    EXE = '/home/pbradley/gitrepos/immune_response_detection/phil_running.py'
+
+    aa_mds_dim = 8
+    job_size = 10000
+
+    mode = 'paired_knns'
+    num_nbrs = 501
+    runtag = 'run26' # KNN w/ round4_merged_filt.tsv
+
+    # mode = 'paired_knns'
+    # num_nbrs = 101
+    # runtag = 'run25' # KNN w/ round4_merged_filt.tsv
+
+    # mode = 'paired_knns'
+    # num_nbrs = 10
+    # runtag = 'run24' # KNN w/ round4_merged_filt.tsv
+
+    # mode = 'paired_knns'
+    # num_nbrs = 25
+    # runtag = 'run23' # KNN w/ round4_merged_filt.tsv
+
+    #mode = 'paired_ranges'
+    #radius = 96.5
+    #runtag = 'run22' # w/ round4_merged_filt.tsv
+    #runtag = 'run20' # w/ paired_sample_filt.tsv
+    xargs = ' --sleeptime 30 '
+
+    # bigfile = '/home/pbradley/csdat/big_covid/big_combo_tcrs_2023-03-07.tsv'
+    # filtfile = f'{DATADIR}phil/paired_sample_filt.tsv'
+    filtfile = f'{DATADIR}phil/round4_merged_filt.tsv'
+
+    if not exists(filtfile):
+        print('reading:', bigfile)
+        tcrs = pd.read_table(bigfile)
+        print('read:', tcrs.shape[0], bigfile)
+        tcrs['cdr3a_nucseq'] = tcrs.cdr3a_nucseq.str.lower()
+        tcrs['cdr3b_nucseq'] = tcrs.cdr3b_nucseq.str.lower()
+        organism = 'human'
+        tcrs = filter_out_bad_genes_and_cdr3s(
+            tcrs, 'va', 'cdr3a', organism, 'A', j_column='ja')
+        tcrs = filter_out_bad_genes_and_cdr3s(
+            tcrs, 'vb', 'cdr3b', organism, 'B', j_column='jb')
+        tcrs.to_csv(filtfile, sep='\t', index=False)
+        print('made:', filtfile)
+
+    rundir = f'/home/pbradley/csdat/raptcr/slurm/{runtag}/'
+    if not exists(rundir):
+        mkdir(rundir)
+
+    cmds_file = f'{rundir}{runtag}_commands.txt'
+    assert not exists(cmds_file)
+    out = open(cmds_file,'w')
+
+    print('reading:', filtfile)
+    tcrs = pd.read_table(filtfile)
+    num_tcrs = tcrs.shape[0]
+
+    num_jobs = (num_tcrs-1)//job_size+1
+
+    if mode == 'paired_ranges':
+        xxargs = f' --radius {radius} '
+    else:
+        xxargs = f' --num_nbrs {num_nbrs} '
+
+    for job in range(num_jobs):
+        start = job*job_size
+        stop = (job+1)*job_size
+
+        outfile_prefix = f'{rundir}{runtag}_{job}'
+        cmd = (f'{PY} {EXE} {xargs} {xxargs} --mode {mode} '
+               f' --filename {filtfile} '
+               f' --start_index {start} --stop_index {stop} '
+               f' --aa_mds_dim {aa_mds_dim} '
+               f' --outfile_prefix {outfile_prefix} '
+               f' > {outfile_prefix}.log 2> {outfile_prefix}.err')
+        out.write(cmd+'\n')
+    out.close()
+    print('made:', cmds_file)
+    exit()
+
+
+if 0: # look at some paired data
+    import faiss
+    from pynndescent import NNDescent
+    import tcrdist
+    from tcrdist.tcr_sampler import parse_tcr_junctions#, resample_shuffled_tcr_chains
+
+    aa_mds_dim = 8
+    num_pos_cdr3 = 16
+
+    bigfile = '/home/pbradley/csdat/big_covid/big_combo_tcrs_2023-03-07.tsv'
+    #subnum = 5000000
+    #subnum = 500000
+    subnum = 250000
+    subfile = f'{DATADIR}phil/paired_sample_{subnum}.tsv'
+
+    outprefix = subfile[:-4]+'_test'
+
+
+    if not exists(subfile):
+        print('reading:', bigfile)
+        tcrs = pd.read_table(bigfile)
+        print('read:', tcrs.shape[0], bigfile)
+        tcrs['cdr3a_nucseq'] = tcrs.cdr3a_nucseq.str.lower()
+        tcrs['cdr3b_nucseq'] = tcrs.cdr3b_nucseq.str.lower()
+        if subnum>tcrs.shape[0]:
+            tcrs.to_csv(subfile, sep='\t', index=False)
+        else:
+            tcrs.sample(subnum, random_state=11).to_csv(subfile, sep='\t', index=False)
+        print('made:', subfile)
+
+
+    organism = 'human'
+    tcrs = pd.read_table(subfile)
+    tcrs = filter_out_bad_genes_and_cdr3s(
+        tcrs, 'va', 'cdr3a', organism, 'A', j_column='ja')
+    tcrs = filter_out_bad_genes_and_cdr3s(
+        tcrs, 'vb', 'cdr3b', organism, 'B', j_column='jb')
+
+    fg_avecs = gapped_encode_tcr_chains(
+        tcrs, organism, 'A', aa_mds_dim, v_column='va',
+        cdr3_column='cdr3a').astype(np.float32)
+
+    fg_bvecs = gapped_encode_tcr_chains(
+        tcrs, organism, 'B', aa_mds_dim, v_column='vb',
+        cdr3_column='cdr3b').astype(np.float32)
+
+    if 0: # compute nearest neighbors in fg paired vecs
+        fg_vecs = np.hstack([fg_avecs, fg_bvecs])
+
+        num_nbrs = 20
+        print('start NNDescent', num_nbrs, fg_vecs.shape)
+        start = timer()
+        index = NNDescent(
+            fg_vecs, n_neighbors=num_nbrs, diversify_prob=1.0,
+            pruning_degree_multiplier=1.5,
+        )
+        print(f'NNDescent took {timer()-start:.3f}', flush=True)
+        I1, D1 = index.neighbor_graph
+        np.save('I1.npy', I1)
+        np.save('D1.npy', D1)
+
+        print('start IndexFlatL2 knn search', num_nbrs, fg_vecs.shape)
+        start = timer()
+        idx = faiss.IndexFlatL2(fg_vecs.shape[1])
+        idx.add(fg_vecs)
+        D2, I2 = idx.search(fg_vecs, num_nbrs)
+        np.save('I2.npy', I2)
+        np.save('D2.npy', D2)
+        print(f'IndexFlatL2 took {timer()-start:.2f}')
+
+        exit()
+
+    atcrs = tcrs['va ja cdr3a cdr3a_nucseq'.split()].itertuples(name=None, index=None)
+    btcrs = tcrs['vb jb cdr3b cdr3b_nucseq'.split()].itertuples(name=None, index=None)
+    junctions = parse_tcr_junctions('human', list(zip(atcrs, btcrs)))
+    achains = resample_background_tcrs_v4(
+        organism, 'A', junctions, preserve_vj_pairings=True)
+    bg_atcrs = pd.DataFrame([dict(va=x[0], cdr3a=x[2]) for x in achains])
+    bg_atcrs.to_csv(f'{outprefix}_bg_atcrs.tsv', sep='\t', index=False)
+    bg_avecs = gapped_encode_tcr_chains(
+        bg_atcrs, organism, 'A', aa_mds_dim, v_column='va',
+        cdr3_column='cdr3a').astype(np.float32)
+    bchains = resample_background_tcrs_v4(
+        organism, 'B', junctions, preserve_vj_pairings=False)
+    bg_btcrs = pd.DataFrame([dict(vb=x[0], cdr3b=x[2]) for x in bchains])
+    bg_btcrs.to_csv(f'{outprefix}_bg_btcrs.tsv', sep='\t', index=False)
+    bg_bvecs = gapped_encode_tcr_chains(
+        bg_btcrs, organism, 'B', aa_mds_dim, v_column='vb',
+        cdr3_column='cdr3b').astype(np.float32)
+
+
+    maxdist = 96
+    n_fg = 50000
+    n_bg = 50000
+    abcounts = compute_background_paired_tcrdist_distributions(
+        fg_avecs[:n_fg], fg_bvecs[:n_fg],
+        bg_avecs[:n_bg], bg_bvecs[:n_bg], maxdist,
+    )
+    print('abcounts:', abcounts.mean(axis=0))
+    np.save(outprefix+'_abcounts.npy', abcounts)
+    exit()
+
+    acounts = compute_background_single_tcrdist_distributions(
+        fg_avecs, bg_avecs, maxdist)
+
+    print('acounts:', acounts.mean(axis=0))
+    np.save(outprefix+'_acounts.npy', acounts)
+
+    bcounts = compute_background_single_tcrdist_distributions(
+        fg_bvecs, bg_bvecs, maxdist)
+    print('bcounts:', bcounts.mean(axis=0))
+    np.save(outprefix+'_bcounts.npy', bcounts)
+
+
+    if 0:
+        idx = faiss.IndexFlatL2(fg_avecs.shape[1])
+        idx.add(bg_avecs)
+        start = timer()
+        print('full avecs range search:', fg_avecs.shape[0], bg_avecs.shape[0])
+        alims,aD,aI = idx.range_search(fg_avecs, 12.5)
+        print(f'took {timer()-start:.2f}')
+
+        idx = faiss.IndexFlatL2(fg_bvecs.shape[1])
+        idx.add(bg_bvecs)
+        print('full bvecs range search:', fg_bvecs.shape[0], bg_bvecs.shape[0])
+        blims,bD,bI = idx.range_search(fg_bvecs, 12.5)
+        print(f'took {timer()-start:.2f}')
+
+
+
+    # for ii in range(10):
+    #     print('run range search')
+    #     print(f'done: {timer()-start:.2f}')
+    # idx = faiss.IndexFlatL2(fg_avecs.shape[1])
+    # idx.add(bg_bvecs)
+    # start = timer()
+    # print('run range search')
+    # blims,bD,bI = idx.range_search(fg_bvecs, 96.5) ## this was super-slow
+    # print(f'done: {timer()-start:.2f}')
+
+
+    exit()
+
+
+
+
+
+    if 0: # make some files for C++ testing
+        # this didn't work: the C++ distance calculations were much slower than
+        # faiss distances...
+        cdr3_weight = 3.0
+
+        chain = 'B'
+        aa_vectors = calc_tcrdist_aa_vectors(aa_mds_dim, SQRT=True)
+        gene_cdr_strings = setup_gene_cdr_strings(organism, chain)
+        num_pos_other_cdrs = len(next(iter(gene_cdr_strings.values())))
+        assert all(len(x)==num_pos_other_cdrs for x in gene_cdr_strings.values())
+
+        seq_len = num_pos_other_cdrs + num_pos_cdr3
+        vec_len = aa_mds_dim * seq_len
+        print('gapped_encode_tcr_chains: aa_mds_dim=', aa_mds_dim,
+              'num_pos_other_cdrs=', num_pos_other_cdrs,
+              'num_pos_cdr3=', num_pos_cdr3, 'vec_len=', vec_len)
+
+        vecs = []
+        for v, cdr3 in zip(tcrs.vb, tcrs.cdr3b):
+            v_vec = encode_sequence(gene_cdr_strings[v], aa_vectors)
+            cdr3_vec = np.sqrt(cdr3_weight) * gapped_encode_cdr3(
+                cdr3, aa_vectors, num_pos_cdr3)
+
+        outfile = 'vec_tcr_seqs.txt'
+        out = open(outfile, 'w')
+        for v, cdr3 in zip(tcrs.vb, tcrs.cdr3b):
+            vgapped = gene_cdr_strings[v]
+            cdr3gapped = trim_and_gap_cdr3(cdr3, num_pos_cdr3)
+            assert len(vgapped+cdr3gapped) == seq_len
+            out.write(vgapped + cdr3gapped + '\n')
+        out.close()
+        print('made:', tcrs.shape[0], outfile)
+
+        outfile = 'vec_tcr_vecs.txt'
+        out = open(outfile,'w')
+        out.write(f'aa_dim {aa_mds_dim}\nseq_len {seq_len}\nseq_wts')
+        for i in range(seq_len):
+            wt = 1.0 if i < num_pos_other_cdrs else 3.0
+            out.write(f' {wt}')
+        out.write('\n')
+        for aa,vecs in aa_vectors.items():
+            out.write(aa+' '+(' '.join(str(x) for x in vecs))+'\n')
+        out.close()
+        print('made:', outfile)
+        out.close()
+        exit()
+
+
+
+
+if 0: # compare our hits to ALICE hits in terms of overlap with YFV-expanding clones
+    import tcrdist
+
+    timepoint = 15
+    bgnum = 6
+    radius = 12.5
+
+    tcrdister = tcrdist.tcr_distances.TcrDistCalculator('human')
+    alice_tcrs = read_yfv_alice_hits()
+    xclones = read_yfv_expanded_clones()
+
+    donors = set(xclones.donor)
+
+    for donor in donors:
+        amask = (alice_tcrs.donor==donor)&(alice_tcrs.timepoint==timepoint)
+        atcrs = alice_tcrs[amask].drop_duplicates('v cdr3aa'.split())
+        xtcrs = xclones[xclones.donor==donor].drop_duplicates('v cdr3aa'.split())
+        num_alice_hits = atcrs.shape[0]
+        num_xtcrs = xtcrs.shape[0]
+        D = calc_tcrdist_matrix(atcrs, xtcrs, tcrdister)
+        threshold = 12.5
+        a_overlap = np.sum(D.min(axis=1)<threshold)
+        x_overlap = np.sum(D.min(axis=0)<threshold)
+        print('overlap: alice', donor, a_overlap/num_alice_hits, x_overlap/num_xtcrs,
+              flush=True)
+
+        # read the tcrs
+        ftag = f'{donor}_{timepoint}_F1__min_count_2.txt'
+        tcrs = read_britanova_tcrs(
+            f'/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/{ftag}.gz')
+
+        # read the nbr counts
+        runtag = 'run9' if bgnum <6 else 'run9b' if bgnum==6 else 'run9c'
+        prefix = f'/home/pbradley/csdat/raptcr/slurm/{runtag}/{runtag}'
+        #run9b_Q2_15_F1__min_count_2.txt_12.5_r0_fg_nbr_counts.npy
+        fg_counts=np.load(f'{prefix}_{ftag}_{radius:.1f}_r0_fg_nbr_counts.npy')
+        num_tcrs = fg_counts.shape[0]
+        assert num_tcrs == tcrs.shape[0]
+
+        # read bg counts, compute pvals
+        bg_counts = np.zeros((num_tcrs,))
+        for r in range(10):
+            bg_counts += np.load(f'{prefix}_{ftag}_{radius:.1f}_r{r}_bg_'
+                                 f'{bgnum}_nbr_counts.npy')
+        num_bg_tcrs = 10*num_tcrs
+
+
+        min_fg_bg_nbr_ratio = 2. # actually these are the function defaults
+        max_fg_bg_nbr_ratio = 100
+        pvals = compute_nbr_count_pvalues(
+            fg_counts, bg_counts, num_bg_tcrs,
+            min_fg_bg_nbr_ratio=min_fg_bg_nbr_ratio,
+            max_fg_bg_nbr_ratio=max_fg_bg_nbr_ratio,
+        )
+
+        pvals = pvals.join(tcrs['count v j cdr3nt cdr3aa'.split()].reset_index(),
+                           on='tcr_index')
+        pvals = pvals.sort_values('evalue').drop_duplicates(['v','cdr3aa'])
+
+        pvals = pvals.head(num_alice_hits)
+        assert pvals.shape[0] == num_alice_hits
+
+        D = calc_tcrdist_matrix(pvals, xtcrs, tcrdister)
+        a_overlap = np.sum(D.min(axis=1)<threshold)
+        x_overlap = np.sum(D.min(axis=0)<threshold)
+        print('overlap pvals', donor, a_overlap/num_alice_hits, x_overlap/num_xtcrs,
+              'max_evalue:', pvals.evalue.iloc[-1], flush=True)
+
+
+    exit()
 
 if 0: # clean igor tcrs
     # in the end, this just removed 155 short cdr3s
@@ -597,8 +1718,8 @@ if 0: # testing mods to current favorite background model
     import tcrdist
     from tcrdist.tcr_sampler import parse_tcr_junctions, resample_shuffled_tcr_chains
 
-    #fname = DATADIR+'phil/britanova/A5-S18.txt.gz'
-    fname = './data/phil/britanova/A5-S11.txt.gz'
+    fname = DATADIR+'phil/britanova/A5-S18.txt.gz'
+    #fname = './data/phil/britanova/A5-S11.txt.gz'
     tcrs = read_britanova_tcrs(fname)#.head(10000)
 
     v_column, j_column, cdr3_column, organism, chain = 'v','j','cdr3aa','human','B'
@@ -607,69 +1728,192 @@ if 0: # testing mods to current favorite background model
 
     junctions = parse_tcr_junctions('human', tcr_tuples)
 
-    res = resample_background_tcrs_v4(junctions)
+    res = resample_background_tcrs_v4('human','B',junctions)
     exit()
+
+
+if 0: # make some background tcrs for paired data
+    from tcrdist.tcr_sampler import (parse_tcr_junctions, resample_shuffled_tcr_chains,
+                                     find_alternate_alleles_for_tcrs)
+    FIX = True
+    organism = 'human'
+
+    fname = DATADIR+'phil/paired_sample_250000.tsv'
+    #fname = DATADIR+'phil/paired_sample_50000.tsv'
+    #v_column, j_column, cdr3_column, organism, chain= 'va','ja','cdr3a','human','A'
+    #v_column, j_column, cdr3_column, organism, chain= 'vb','jb','cdr3b','human','B'
+    tcrs = read_paired_data(fname)
+
+    acols = 'va ja cdr3a cdr3a_nucseq'.split()
+    bcols = 'vb jb cdr3b cdr3b_nucseq'.split()
+    atcr_tuples = tcrs[acols].itertuples(name=None, index=None)
+    btcr_tuples = tcrs[bcols].itertuples(name=None, index=None)
+
+    if FIX:
+        tcr_tuples_fixed = find_alternate_alleles_for_tcrs(
+            organism, list(zip(atcr_tuples, btcr_tuples)), verbose=True)
+        atcr_tuples =  [x[0] for x in tcr_tuples_fixed]
+        btcr_tuples =  [x[1] for x in tcr_tuples_fixed]
+
+    junctions = parse_tcr_junctions('human', list(zip(atcr_tuples, btcr_tuples)))
+
+    bg_atcr_tuples = resample_background_tcrs_v4(
+        organism, 'A', junctions, preserve_vj_pairings=True)
+    bg_btcr_tuples = resample_background_tcrs_v4(
+        organism, 'B', junctions, preserve_vj_pairings=False)
+
+    bg_tcrs = pd.DataFrame([
+        dict(va=va, ja=ja, cdr3a=cdr3a, cdr3a_nucseq=cdr3a_nucseq,
+             vb=vb, jb=jb, cdr3b=cdr3b, cdr3b_nucseq=cdr3b_nucseq)
+        for ((va,ja,cdr3a,cdr3a_nucseq),(vb,jb,cdr3b,cdr3b_nucseq)) in zip(
+                bg_atcr_tuples, bg_btcr_tuples)])
+
+    bg_tcrs = filter_out_bad_genes_and_cdr3s(
+        bg_tcrs, 'va', 'cdr3a', organism, 'A', j_column='ja')
+    bg_tcrs = filter_out_bad_genes_and_cdr3s(
+        bg_tcrs, 'vb', 'cdr3b', organism, 'B', j_column='jb')
+
+    num_tcrs = bg_tcrs.shape[0]
+    print('final num tcrs:', num_tcrs)
+
+    outfile = f'{DATADIR}phil/paired_bg_tcrs_{num_tcrs}.tsv'
+    bg_tcrs.to_csv(outfile, sep='\t', index=False)
+    exit()
+
 
 
 if 0: # look at current favorite background model, seems to make too few 0-N cdr3s
     import tcrdist
-    from tcrdist.tcr_sampler import parse_tcr_junctions, resample_shuffled_tcr_chains
+    import itertools as it
+    from tcrdist.tcr_sampler import (parse_tcr_junctions, resample_shuffled_tcr_chains,
+                                     find_alternate_alleles_for_tcrs)
 
-    #fname = DATADIR+'phil/britanova/A5-S18.txt.gz'
-    fname = './data/phil/britanova/A5-S11.txt.gz'
-    tcrs = read_britanova_tcrs(fname)
+    LOG = True
+    FIX = True
 
-    v_column, j_column, cdr3_column, organism, chain = 'v','j','cdr3aa','human','B'
-    tcr_tuples = [(None,x) for x in tcrs['v j cdr3aa cdr3nt'.split()].itertuples(
-        name=None, index=None)]
+    if 2:
+        fname = DATADIR+'phil/paired_sample_250000.tsv'
+        #fname = DATADIR+'phil/paired_sample_50000.tsv'
+        #v_column, j_column, cdr3_column, organism, chain= 'va','ja','cdr3a','human','A'
+        v_column, j_column, cdr3_column, organism, chain= 'vb','jb','cdr3b','human','B'
+        tcrs = read_paired_data(fname)
+
+        acols = 'va ja cdr3a cdr3a_nucseq'.split()
+        bcols = 'vb jb cdr3b cdr3b_nucseq'.split()
+        atcr_tuples = tcrs[acols].itertuples(name=None, index=None)
+        btcr_tuples = tcrs[bcols].itertuples(name=None, index=None)
+
+        if FIX:
+            tcr_tuples_fixed = find_alternate_alleles_for_tcrs(
+                organism, list(zip(atcr_tuples, btcr_tuples)), verbose=True)
+            atcr_tuples =  [x[0] for x in tcr_tuples_fixed]
+            btcr_tuples =  [x[1] for x in tcr_tuples_fixed]
+
+        ftag = fname.split('/')[-1][:-4]+'_'+chain
+        if chain == 'A':
+            tcr_tuples = list(zip(atcr_tuples, it.repeat(None)))
+        else:
+            tcr_tuples = list(zip(it.repeat(None), btcr_tuples))
+    else:
+        fname = DATADIR+'phil/britanova/A5-S18.txt.gz'
+        #fname = './data/phil/britanova/A5-S11.txt.gz'
+        ftag = fname.split('/')[-1][:-7]
+        v_column, j_column, cdr3_column, organism, chain = 'v','j','cdr3aa','human','B'
+        tcrs = read_britanova_tcrs(fname)
+
+        tcr_tuples = [(None,x) for x in tcrs['v j cdr3aa cdr3nt'.split()].itertuples(
+            name=None, index=None)]
 
     junctions = parse_tcr_junctions('human', tcr_tuples)
 
-    bg_tcr_tuples, src_junction_indices = resample_shuffled_tcr_chains(
-        organism, tcrs.shape[0], chain, junctions, return_src_junction_indices=True,
-    )
-    bg_nucseq_srcs = []
-    for tcr, inds in zip(bg_tcr_tuples, src_junction_indices):
-        if len(bg_nucseq_srcs)%50000==0:
-            print(len(bg_nucseq_srcs))
-        vjunc = junctions.iloc[inds[0]]
-        jjunc = junctions.iloc[inds[1]]
-        bg_nucseq_srcs.append(vjunc.cdr3b_nucseq_src[:inds[2]] +
-                              jjunc.cdr3b_nucseq_src[inds[2]:])
-        assert len(tcr[3]) == len(bg_nucseq_srcs[-1])
+    fg_nucseq_srcs = list(junctions[f'cdr3{chain.lower()}_nucseq_src'])
+    # remove '*0N' from gene names
+    fg_genes = [(x.split('*')[0], y.split('*')[0]) # tuple: (v,j)
+                for x,y in zip(junctions['v'+chain.lower()],
+                               junctions['j'+chain.lower()])]
+    v_genes = [x[0] for x in Counter([y[0] for y in fg_genes]).most_common()]
+    j_genes = [x[0] for x in Counter([y[1] for y in fg_genes]).most_common()]
+    genes_ordered = [v_genes, j_genes]
 
-    fg_nucseq_srcs = list(junctions.cdr3b_nucseq_src)
-    assert len(fg_nucseq_srcs) == len(bg_nucseq_srcs)
-    plt.figure(figsize=(12,4))
-    for tag, srcs in zip(['fg','bg'], [fg_nucseq_srcs, bg_nucseq_srcs]):
-        plt.subplot(131)
-        lens = [len(x)//3 for x in srcs]
-        counts = Counter(lens)
-        mn,mx = min(counts.keys()), max(counts.keys())
-        xvals = range(mn,mx+1)
-        plt.plot(xvals, [counts[x] for x in xvals], label=tag)
-        plt.title('cdr3aa len')
+    nrows, ncols = 2,5
+    plt.figure(figsize=(4*ncols,4*nrows))
+    for row,bgnum in enumerate([4,6]):
+        if bgnum==4:
+            bg_tcr_tuples, src_junction_indices = resample_shuffled_tcr_chains(
+                organism, tcrs.shape[0], chain, junctions,
+                return_src_junction_indices=True,
+            )
+            bg_nucseq_srcs = []
+            for tcr, inds in zip(bg_tcr_tuples, src_junction_indices):
+                if len(bg_nucseq_srcs)%150000==0:
+                    print(len(bg_nucseq_srcs))
+                vseq = fg_nucseq_srcs[inds[0]]
+                jseq = fg_nucseq_srcs[inds[1]]
+                bg_nucseq_srcs.append(vseq[:inds[2]] + jseq[inds[2]:])
+                assert len(tcr[3]) == len(bg_nucseq_srcs[-1])
+        else:
+            preserve_vj_pairings = (chain=='A')
+            bg_tcr_tuples, bg_nucseq_srcs = resample_background_tcrs_v4(
+                organism, chain, junctions, preserve_vj_pairings=preserve_vj_pairings,
+                return_nucseq_srcs=True)
+        bg_genes = [(x[0].split('*')[0], x[1].split('*')[0])
+                    for x in bg_tcr_tuples]
 
-        plt.subplot(132)
-        lens = [x.count('N') for x in srcs]
-        counts = Counter(lens)
-        mn,mx = min(counts.keys()), max(counts.keys())
-        xvals = range(mn,mx+1)
-        plt.plot(xvals, [counts[x] for x in xvals], label=tag)
-        plt.title('num N nucs')
-        print('N0:', tag, counts[0])
+        assert len(fg_nucseq_srcs) == len(bg_nucseq_srcs)
+        for tag, srcs, genes in zip(['fg','bg'], [fg_nucseq_srcs, bg_nucseq_srcs],
+                                    [fg_genes, bg_genes]):
+            plt.subplot(nrows, ncols, 1+row*ncols)
+            lens = [len(x)//3 for x in srcs]
+            counts = Counter(lens)
+            mn,mx = min(counts.keys()), max(counts.keys())
+            mx = 25
+            xvals = range(mn,mx+1)
+            yvals = [counts[x] for x in xvals]
+            if LOG:
+                yvals = np.log1p(yvals)
+            plt.plot(xvals, yvals, label=tag)
+            plt.title(f'bgnum={bgnum} cdr3aa len')
 
-        plt.subplot(133)
-        lens = [x.count('D') for x in srcs]
-        counts = Counter(lens)
-        mn,mx = min(counts.keys()), max(counts.keys())
-        xvals = range(mn,mx+1)
-        plt.plot(xvals, [counts[x] for x in xvals], label=tag)
-        plt.title('num D nucs')
-        #plt.plot(xvals, np.sqrt([counts[x] for x in xvals]), label=tag)
+            plt.subplot(nrows, ncols, 2+row*ncols)
+            lens = [x.count('N') for x in srcs]
+            counts = Counter(lens)
+            mn,mx = min(counts.keys()), max(counts.keys())
+            mx = 25
+            xvals = range(mn,mx+1)
+            yvals = [counts[x] for x in xvals]
+            if LOG:
+                yvals = np.log1p(yvals)
+            plt.plot(xvals, yvals, label=tag)
+            plt.title(f'bgnum={bgnum} num N nucs')
+            print('N0:', tag, counts[0])
+
+            plt.subplot(nrows, ncols, 3+row*ncols)
+            lens = [x.count('D') for x in srcs]
+            counts = Counter(lens)
+            mn,mx = min(counts.keys()), max(counts.keys())
+            xvals = range(mn,mx+1)
+            yvals = [counts[x] for x in xvals]
+            if LOG:
+                yvals = np.log1p(yvals)
+            plt.plot(xvals, yvals, label=tag)
+            plt.title(f'bgnum={bgnum} num D nucs')
+
+            for ig, vj in enumerate('vj'):
+                plt.subplot(nrows, ncols, 4+ig+row*ncols)
+                counts = Counter(x[ig] for x in genes)
+                yvals = [counts[x] for x in genes_ordered[ig]]
+                if LOG:
+                    yvals = np.log1p(yvals)
+                xvals = range(len(genes_ordered[ig]))
+                plt.plot(xvals, yvals, label=tag)
+                plt.title(f'bgnum={bgnum} {vj} gene counts')
+
     plt.legend()
-    ftag = fname.split('/')[-1][:-7]
-    pngfile = f'/home/pbradley/csdat/raptcr/bg4_{ftag}_dists.png'
+    pngfile = f'/home/pbradley/csdat/raptcr/bg4and6_{ftag}_dists.png'
+    if LOG:
+        pngfile = pngfile[:-4]+'_log1p.png'
+    if FIX:
+        pngfile = pngfile[:-4]+'_fix.png'
     plt.savefig(pngfile)
     print('made:', pngfile)
 
@@ -1117,7 +2361,7 @@ if 0: # look at nbr counts in YFV data
     exit()
 
 
-if 1: # look at nbr counts in the britanova set
+if 0: # look at nbr counts in the britanova set
     #old_ftags = get_original_18_ftags()
     #print(old_ftags)
     #exit()
@@ -1483,13 +2727,15 @@ if 0: # setup for big calc
 
     # fnames = glob('/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
     #               '??_0_*min_count_2.txt.gz') ; assert len(fnames) == 12
-    # fnames = glob('/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
-    #               '*min_count_2.txt.gz')
-    fnames = glob('/home/pbradley/gitrepos/immune_response_detection/'
-                  'data/phil/britanova/A*gz')
+    fnames = glob('/home/pbradley/csdat/yfv/pogorelyy_et_al_2018/Yellow_fever/'
+                  '??_15_*min_count_2.txt.gz') ; assert len(fnames) == 7
+    # fnames = glob('/home/pbradley/gitrepos/immune_response_detection/'
+    #               'data/phil/britanova/A*gz')
     print(len(fnames))
 
-    runtag = 'run19' ; xargs = ' --max_tcrs 500000 ' # britanova, bg_nums=[7]
+    runtag = 'run9c' ; xargs = ' --max_tcrs 500000 ' # yfv day 15, bg_nums = [6]
+    # runtag = 'run9b' ; xargs = ' --max_tcrs 500000 ' # yfv day 15, bg_nums = [6]
+    #runtag = 'run19' ; xargs = ' --max_tcrs 500000 ' # britanova, bg_nums=[7]
     #runtag = 'run18' ; xargs = ' --max_tcrs 500000 ' # emerson, A*02:01-/unk donors
     #runtag = 'run17' ; xargs = ' --max_tcrs 500000 ' # emerson, A*02:01+ donors
     #runtag = 'run16' ; xargs = ' --max_tcrs 500000 ' # britanova, bg_nums=[4,6]

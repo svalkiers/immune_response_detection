@@ -17,7 +17,8 @@ from os.path import exists
 from glob import glob
 from os import mkdir, system
 import random
-
+import faiss
+import itertools as it
 
 # It may be helpful to take the sqrt of this matrix if we are
 # going to use an L2 (Euclidean) distance in the embedding space...
@@ -40,22 +41,6 @@ def calc_mds_vecs(dm, n_components, return_stress = False):
         return vecs, mds.stress_
     else:
         return vecs
-
-
-def update_hasher_aa_vectors_by_mds_tiling(dm, n_components, hasher):
-    '''Try replacing hasher's aa_vectors_ with new ones created by tiling
-    lower dimensional MDS vectors. Doesn't seem to be improve things much.
-    '''
-    assert dm.shape[0] == len(AALPHABET)
-    vecs, stress = calc_mds_vecs(dm, n_components, return_stress=True)
-    print(f'update_aa_vectors_by_mds_tiling: n_components= {n_components} '
-          f'stress= {stress:.3f}')
-    m = hasher.m
-    for vec, aa in zip(vecs, AALPHABET):
-        assert hasher.aa_vectors_[aa].shape == (m,) # sanity
-        assert vec.shape == (n_components,)
-        hasher.aa_vectors_[aa] = np.array([vec[i%n_components] for i in range(m)])
-    return
 
 
 def trim_and_gap_cdr3(cdr3, num_pos, n_trim=3, c_trim=2):
@@ -300,288 +285,6 @@ def filter_out_bad_genes_and_cdr3s(
     return df[good_cdr3s_mask & (~bad_v_genes_mask) & (~unknown_genes_mask)].copy()
 
 
-def add_vdj_splits_info_to_junctions(
-        junctions,
-        min_d_length = 3, # otherwise it's hard to reliably place it
-):
-    ''' returns new copy of junctions that has more info on where the V/N/D/N/J
-    regions start and stop, for use in a simulated background model
-
-    last_v/first_d/last_d are -1 if not defined; first_j is len(cdr3nt)
-    '''
-    dfl = []
-    for l in junctions.itertuples():
-        seq = l.cdr3b_nucseq_src[:]
-        nD = seq.count('D')
-        if nD>0 and nD<min_d_length:
-            seq = seq.replace('D','N')
-        if seq[0] != 'V' or seq[-1] != 'J':
-            print('whoah:', seq)
-
-        # landmarks: last V, first D, last D, first J
-        last_v, first_d, last_d, first_j = -1, -1, -1, len(seq)
-        for ii,a in enumerate(seq):
-            if a=='V':
-                last_v = ii
-            elif a=='D':
-                first_d = ii
-                break
-        for ii,a in enumerate(reversed(seq)): # can't reverse an enumerate!
-            if a=='J':
-                first_j = len(seq)-1-ii
-            elif a=='D':
-                last_d = len(seq)-1-ii
-                break
-
-        has_d = (first_d != -1)
-
-        v_nucseq = l.cdr3b_nucseq[:last_v+1]
-        j_nucseq = l.cdr3b_nucseq[first_j:]
-        if has_d:
-            n1_nucseq = l.cdr3b_nucseq[last_v+1:first_d]
-            d_nucseq = l.cdr3b_nucseq[first_d:last_d+1]
-            n2_nucseq = l.cdr3b_nucseq[last_d+1:first_j]
-        else:
-            n1_nucseq = l.cdr3b_nucseq[last_v+1:first_j]
-            d_nucseq = ''
-            n2_nucseq = ''
-        assert v_nucseq + n1_nucseq + d_nucseq + n2_nucseq + j_nucseq == l.cdr3b_nucseq
-
-        dfl.append(dict(
-            vdjseq = seq,
-            last_v = last_v,
-            first_d = first_d,
-            last_d = last_d,
-            first_j = first_j,
-            has_d = has_d,
-            v_nucseq = v_nucseq,
-            n1_nucseq = n1_nucseq,
-            d_nucseq = d_nucseq,
-            n2_nucseq = n2_nucseq,
-            j_nucseq = j_nucseq,
-        ))
-    df = pd.concat([junctions.reset_index(drop=True), pd.DataFrame(dfl)], axis=1)
-    return df
-
-
-def randomly_merge_two_nucseqs(a,b):
-    ''' helper function for cominbining two N regions from different tcrs
-    '''
-    take_a_len = random.randint(0,1)
-    minlen = min(len(a), len(b))
-    split = random.randint(0,minlen)
-    if take_a_len:
-        from_b = b[len(b)-split:]
-        from_a = a[:len(a)-split]
-    else:
-        from_a = a[:split]
-        from_b = b[split:]
-    return from_a + from_b
-
-
-def resample_cdr3_nt_regions(junctions, match_lens=True):
-    ''' background model based on mixing and matching cdr3 nucleotide pieces
-    "junctions" comes from tcrdist.tcr_sampler.parse_tcr_junctions
-    and then we have to call the add_vdj_splits_info_to_junctions function above
-    '''
-    import tcrdist
-    all_tcrs = []
-    for has_d in [True, False]:
-        df = junctions[junctions.has_d==has_d]
-
-        old_counts = Counter(len(x) for x in df.cdr3b)
-        new_counts = Counter()
-        tcrs = []
-        N = df.shape[0]
-        attempts = 0
-        badlens = 0
-        check_lengths = match_lens # turn it off if we waste too long
-        while len(tcrs) < N:
-            attempts += 1
-            if attempts%10000==0:
-                print('resample_junctions:', attempts, len(tcrs), badlens, has_d)
-            vr = df.iloc[random.randint(0, N-1)]
-            jr = df.iloc[random.randint(0, N-1)]
-
-            if not has_d:
-                # only choice is who contributes the N nucleotides
-                assert not vr.has_d and not jr.has_d
-                n_nucseq = randomly_merge_two_nucseqs(vr.n1_nucseq, jr.n1_nucseq)
-                nucseq = (vr.v_nucseq + n_nucseq + jr.j_nucseq)
-
-            else:
-                dr = df.iloc[random.randint(0, N-1)]
-                n1_nucseq = randomly_merge_two_nucseqs(vr.n1_nucseq, dr.n1_nucseq)
-                n2_nucseq = randomly_merge_two_nucseqs(dr.n2_nucseq, jr.n2_nucseq)
-                nucseq = (vr.v_nucseq + n1_nucseq + dr.d_nucseq + n2_nucseq +
-                          jr.j_nucseq)
-            if len(nucseq)%3 != 0:
-                continue
-
-            cdr3 = tcrdist.translation.get_translation(nucseq)
-            assert len(cdr3) == len(nucseq)//3
-            if check_lengths and new_counts[len(cdr3)] >= old_counts[len(cdr3)]:
-                badlens += 1
-                if badlens>len(tcrs): # too many failures
-                    print('no more len-checking: too many badlens:', badlens, len(tcrs),
-                          N, has_d)
-                    check_lengths = False
-                continue
-            if '*' not in cdr3:
-                new_counts[len(cdr3)] += 1
-                tcrs.append((vr.vb, jr.jb, cdr3, nucseq))
-        all_tcrs.extend(tcrs)
-    assert len(all_tcrs) == junctions.shape[0]
-    random.shuffle(all_tcrs)
-
-    return all_tcrs
-
-
-
-def parse_cdr3_aa_regions(
-        df,
-        organism,
-        chain,
-        v_column,
-        j_column,
-        cdr3_column,
-        extend_align=0,
-):
-    ''' Returns new dataframe with info on where the V/J regions of the
-    cdr3 amino acid sequence end/begin
-
-    columns of new dataframe: ['v', 'j', 'cdr3', 'v_part', 'ndn_part', 'j_part']
-
-    v_part is the part of the CDR3 that aligns with the V gene AA sequence
-    j_part is the part of the CDR3 that aligns with the J gene AA sequence
-    ndn_part is everything else (the middle; might be the empty string)
-
-    '''
-    all_genes_df = pd.read_table(DATADIR+'phil/combo_xcr.tsv')
-    all_genes_df = all_genes_df[(all_genes_df.organism==organism)&
-                                (all_genes_df.chain==chain)]
-
-    all_genes_df['cdr3'] = all_genes_df.cdrs.str.split(';').str.get(-1).str.replace(
-        '.','',regex=False)
-
-    v_df = all_genes_df[all_genes_df.region=='V'].set_index('id')['cdr3']
-    j_df = all_genes_df[all_genes_df.region=='J'].set_index('id')['cdr3']
-
-    assert all(x in j_df.index for x in df[j_column])
-
-    dfl = []
-    for ind,v,j,cdr3 in df[[v_column,j_column,cdr3_column]].itertuples(name=None):
-        v_cdr3 = v_df[v]
-        j_cdr3 = j_df[j]
-
-        v_idents = 0
-        for a,b in zip(v_cdr3, cdr3):
-            if a!=b:
-                break
-            else:
-                v_idents += 1
-
-        j_idents = 0
-        for a,b in zip(reversed(j_cdr3), reversed(cdr3)):
-            if a!=b:
-                break
-            else:
-                j_idents += 1
-
-        v_idents += extend_align
-        j_idents += extend_align
-
-        overlap = v_idents+j_idents - len(cdr3)
-        if overlap>0:
-            v_idents -= overlap//2
-            j_idents -= (overlap - overlap//2)
-
-        prefix = cdr3[:v_idents]
-        middle = cdr3[v_idents:len(cdr3)-j_idents]
-        suffix = cdr3[len(cdr3)-j_idents:]
-
-        assert prefix+middle+suffix == cdr3
-        if ind%25000==0:
-            print(f'{prefix:7s} {middle:12s} {suffix:12s} {cdr3} {v_cdr3} {j_cdr3}',
-                  ind, df.shape[0])
-
-        dfl.append(dict(
-            v=v,
-            j=j,
-            cdr3=cdr3,
-            v_part=prefix,
-            ndn_part=middle,
-            j_part=suffix,
-        ))
-
-    parsed_df = pd.DataFrame(dfl)
-
-    return parsed_df
-
-
-def resample_cdr3_aa_regions(
-        parsed_df,
-        num=None,
-        match_j_families=False, # require ndn_part and j_part to have same j fam
-        verbose=False,
-):
-    ''' Build a new random repertoire by mixing and matching cdr3 pieces
-    from a parsed repertoire.
-
-    Pieces are defined at the amino acid level
-
-    match the CDR3 length distributions
-    '''
-    if num is None:
-        num = parsed_df.shape[0]
-    # TODO: right now this only works if resampling the same number of tcrs,
-    #   because of cdr3-length-distribution-matching
-    assert num == parsed_df.shape[0]
-
-    old_counts = Counter(parsed_df.cdr3.str.len())
-    new_counts = Counter() # the new cdr3 len counts
-
-    dfl = []
-    skipcount = 0 # diagnostics
-
-    while len(dfl)<num:
-        replace = num>parsed_df.shape[0]
-        v_parts = parsed_df.sample(num, replace=replace)
-        d_parts = parsed_df.sample(num, replace=replace)
-        j_parts = parsed_df.sample(num, replace=replace)
-
-        for vrow, drow, jrow in zip(v_parts.itertuples(),
-                                    d_parts.itertuples(),
-                                    j_parts.itertuples()):
-            counter= vrow.Index
-            if verbose and counter%10000==0:
-                print(counter, len(dfl), skipcount)
-            v = vrow.v
-            j = jrow.j
-            if match_j_families and j[2] == 'B':
-                assert j.startswith('TRBJ') and j[5] == '-'
-                j_jfam = int(jrow.j[4])
-                d_jfam = int(drow.j[4])
-                assert j_jfam in [1,2] and d_jfam in [1,2]
-                if j_jfam != d_jfam:
-                    skipcount += 1
-                    continue
-
-            cdr3 = vrow.v_part + drow.ndn_part + jrow.j_part
-            l = len(cdr3)
-            if new_counts[l] < old_counts[l]:
-                dfl.append(dict(v=v, j=j, cdr3=cdr3))
-                new_counts[l] += 1
-
-                if len(dfl) >= num:
-                    break
-            else:
-                skipcount += 1
-
-    assert len(dfl) == num
-    if verbose:
-        print('final skipcount:', skipcount)
-    return pd.DataFrame(dfl)
 
 def compute_nbr_count_pvalues(
         fg_counts,
@@ -665,33 +368,81 @@ def read_britanova_tcrs(filename, max_tcrs=None, min_count=2):
     print('num_tcrs:', tcrs.shape[0], filename)
     return tcrs
 
-def resample_background_tcrs_v4(organism, chain, junctions):
-    from tcrdist.tcr_sampler import parse_tcr_junctions, resample_shuffled_tcr_chains
+
+def parse_junctions_for_background_resampling(
+        tcrs,
+        organism,
+        chain, # 'A' or 'B'
+        v_column,
+        j_column,
+        cdr3aa_column,
+        cdr3nt_column,
+):
+    ''' setup for the "resample_background_tcrs_v4" function by parsing
+    the V(D)J junctions in the foreground tcr set
+
+    returns a dataframe with info
+    '''
+    from tcrdist.tcr_sampler import parse_tcr_junctions
+
+    # tcrdist parsing function expects paired tcrs as list of tuples of tuples
+    cols = [v_column, j_column, cdr3aa_column, cdr3nt_column]
+    tcr_tuples = tcrs[cols].itertuples(name=None, index=None)
+    if chain == 'A':
+        tcr_tuples = zip(tcr_tuples, it.repeat(None))
+    else:
+        tcr_tuples = zip(it.repeat(None), tcr_tuples)
+
+    junctions = parse_tcr_junctions(organism, list(tcr_tuples))
+    #junctions = add_vdj_splits_info_to_junctions(junctions)
+    return junctions
+
+
+def resample_background_tcrs_v4(
+        organism, # human or mouse
+        chain, # A or B
+        junctions, # junctions info dataframe created by the function above this one
+        preserve_vj_pairings = False, # consider setting True for alpha chain
+        return_nucseq_srcs = False, # for debugging
+):
+    ''' Resample shuffled background sequences, number will be equal to size of
+    foreground repertore, ie junctions.shape[0]
+
+    junctions is a dataframe with information about the V(D)J junctions in the
+    foreground tcrs. Created by the function above this one,
+        "parse_junctions_for_background_resampling"
+
+    returns a list of tuples [(v,j,cdr3aa,cdr3nt), ...] of length = junctions.shape[0]
+
+    '''
+    from tcrdist.tcr_sampler import resample_shuffled_tcr_chains
+
+    assert chain in ['A','B']
 
     multiplier = 3 # so we have enough to match distributions
     bg_tcr_tuples, src_junction_indices = resample_shuffled_tcr_chains(
         organism, multiplier * junctions.shape[0], chain, junctions,
+        preserve_vj_pairings = preserve_vj_pairings,
         return_src_junction_indices=True,
     )
 
+    fg_nucseq_srcs = list(junctions[f'cdr3{chain.lower()}_nucseq_src'])
+
     resamples = []
     for tcr, inds in zip(bg_tcr_tuples, src_junction_indices):
-        if len(resamples)%50000==0:
+        if len(resamples)%500000==0:
             print('resample_background_tcrs_v4: build nucseq_srclist', len(resamples),
                   len(bg_tcr_tuples))
         v,j,cdr3aa,cdr3nt = tcr
-        vjunc = junctions.iloc[inds[0]]
-        jjunc = junctions.iloc[inds[1]]
-        nucseq_src = (vjunc.cdr3b_nucseq_src[:inds[2]] +
-                      jjunc.cdr3b_nucseq_src[inds[2]:])
+        v_nucseq = fg_nucseq_srcs[inds[0]]
+        j_nucseq = fg_nucseq_srcs[inds[1]]
+        nucseq_src = v_nucseq[:inds[2]] + j_nucseq[inds[2]:]
         assert len(tcr[3]) == len(nucseq_src)
-        #dfl.append(dict(v=v, j=j, cdr3aa=cdr3aa, cdr3nt=cdr3nt, nucseq_src=nucseq_src))
         resamples.append((v, j, cdr3aa, cdr3nt, nucseq_src))
 
-    fg_nucseq_srcs = list(junctions.cdr3b_nucseq_src)
 
     # try to match lengths first
-    fg_lencounts = Counter(len(x.cdr3b) for x in junctions.itertuples())
+    fg_lencounts = Counter(len(x) for x in junctions['cdr3'+chain.lower()])
 
     N = junctions.shape[0]
     good_resamples = resamples[:N]
@@ -711,6 +462,7 @@ def resample_background_tcrs_v4(organism, chain, junctions):
         ii = np.random.randint(0,len(bad_resamples))
         iilen = len(bad_resamples[ii][2])
         if bg_lencounts[iilen] < fg_lencounts[iilen]: # too few of len=iilen
+            tries = 0
             while True:
                 tries += 1
                 jj = np.random.randint(0,len(good_resamples))
@@ -742,26 +494,51 @@ def resample_background_tcrs_v4(organism, chain, junctions):
                 #         print(ii, fg_lencounts[ii]-bg_lencounts[ii], end=' ')
                 # print()
 
-    assert len(good_resamples)
-    # now try to match the N insertion distributions, while preserving the
-    # length distributions
+    assert len(good_resamples) == N
+
     fg_ncounts = Counter(x.count('N') for x in fg_nucseq_srcs)
     bg_ncounts = Counter(x[4].count('N') for x in good_resamples)
+
+    if chain == 'B':
+        desirable_Ncounts = [0,1]
+    else:
+        desirable_Ncounts = [x for x in range(10)
+                             if bg_ncounts[x] < 0.9 * fg_ncounts[x]]
+    print('desirable_Ncounts:', desirable_Ncounts)
+    bad_resamples = [x for x in bad_resamples if x[4].count('N') in desirable_Ncounts]
+
+    # now try to match the N insertion distributions, while preserving the
+    # length distributions
+    bad_ncounts = Counter(x[4].count('N') for x in bad_resamples)
     all_ncounts = Counter(x[4].count('N') for x in resamples)
 
     tries = 0
     too_many_tries = 10*junctions.shape[0]
+    too_many_inner_tries = 1000
+
+    for num in desirable_Ncounts:
+        print('Ns:', num, 'fg_ncounts:', fg_ncounts[num],
+              'bg_ncounts:', bg_ncounts[num], 'bad_ncounts:', bad_ncounts[num],
+              'sum:', bg_ncounts[num] + bad_ncounts[num])
+        if fg_ncounts[num] > all_ncounts[num]:
+            print('resample_background_tcrs_v4 dont have enough Ns:',
+                  num, fg_ncounts[num], '>', all_ncounts[num])
 
     for ii in range(len(bad_resamples)):
         tries += 1
+        if tries > too_many_tries:
+            print('WARNING too_many_tries2:', tries)
+            break
         iilen = len(bad_resamples[ii][2])
         if bg_lencounts[iilen]==0:
             continue
         iinc = bad_resamples[ii][4].count('N')
-        if iinc in [0,1] and fg_ncounts[iinc] > bg_ncounts[iinc]: # most biased
+        assert iinc in desirable_Ncounts # now by construction
+        if iinc in desirable_Ncounts and fg_ncounts[iinc] > bg_ncounts[iinc]:
             # find good_resamples with same len, elevated nc
+            inner_tries = 0
             while True:
-                tries += 1
+                inner_tries += 1
                 jj = np.random.randint(0,len(good_resamples))
                 jjlen = len(good_resamples[jj][2])
                 if jjlen != iilen:
@@ -769,11 +546,12 @@ def resample_background_tcrs_v4(organism, chain, junctions):
                 jjnc = good_resamples[jj][4].count('N')
                 if bg_ncounts[jjnc] > fg_ncounts[jjnc]:
                     break
-                if tries > too_many_tries:
+                if inner_tries > too_many_inner_tries:
                     break
-            if tries > too_many_tries:
-                print('WARNING too_many_tries2:', tries)
-                break
+            if inner_tries > too_many_inner_tries:
+                tries += inner_tries//10
+                continue
+
             #print('swap:', iinc, jjnc, iilen, fg_ncounts[iinc]-bg_ncounts[iinc],
             #      tries)
             tmp = good_resamples[jj]
@@ -781,6 +559,11 @@ def resample_background_tcrs_v4(organism, chain, junctions):
             bad_resamples[ii] = tmp
             bg_ncounts[iinc] += 1
             bg_ncounts[jjnc] -= 1
+            bad_ncounts[iinc] -= 1
+            bad_ncounts[jjnc] += 1
+            if all(bad_ncounts[x] == 0 for x in desirable_Ncounts):
+                print('ran out of desirable_Ncounts:', desirable_Ncounts)
+                break
 
 
     print('final Ndevs:', end=' ')
@@ -795,8 +578,14 @@ def resample_background_tcrs_v4(organism, chain, junctions):
             print(ii, fg_lencounts[ii]-bg_lencounts[ii], end=' ')
     print()
 
-    return [x[:4] for x in good_resamples]
-    #return fg_ncounts, bg_ncounts, all_ncounts
+    good_tcrs = [x[:4] for x in good_resamples]
+
+    if return_nucseq_srcs:
+        good_nucseq_srcs = [x[4] for x in good_resamples]
+        return good_tcrs, good_nucseq_srcs
+    else:
+        return good_tcrs
+
 
 
 def sample_igor_tcrs(
@@ -824,4 +613,90 @@ def sample_igor_tcrs(
         'v':v_column,
         'j':j_column,
     })
+
+def compute_background_single_tcrdist_distributions(
+        fg_vecs,
+        bg_vecs,
+        maxdist,
+        rowstep = 5000,
+        colstep = 50000,
+):
+    dim = fg_vecs.shape[1]
+    assert dim == bg_vecs.shape[1]
+    num_fg = fg_vecs.shape[0]
+    num_bg = bg_vecs.shape[0]
+    maxdist = int(maxdist+0.1) # confirm int
+    print('compute_background_single_tcrdist_distributions: '
+          f'dim= {dim} maxdist= {maxdist}')
+    #maxdist_float = maxdist + 0.5
+    dist_counts = np.zeros((num_fg, maxdist+1), dtype=int)
+
+    nrows = (num_fg-1)//rowstep + 1
+    ncols = (num_bg-1)//colstep + 1
+
+    # initialize distance storage
+    dists = np.zeros((rowstep*colstep,), dtype=np.float32) # 1D array
+
+    start0 = timer()
+    for ii in range(nrows):
+        ii_start = ii*rowstep
+        for jj in range(ncols):
+            jj_start = jj*colstep
+            xq = fg_vecs[ii_start:ii_start+rowstep] # faiss terminology here
+            xb = bg_vecs[jj_start:jj_start+colstep]
+            nq = xq.shape[0] # Num Query
+            nb = xb.shape[0] # Num dataBase (?)
+
+            start = timer()
+            faiss.pairwise_L2sqr(dim, nq, faiss.swig_ptr(xq), nb, faiss.swig_ptr(xb),
+                                 faiss.swig_ptr(dists))
+            disttime = timer()-start
+            #print(disttime)
+            start += disttime
+
+            # now fill counts
+            for iq in range(nq):
+                dist_counts[ii_start+iq,:] += np.histogram(
+                    dists[iq*nb:(iq+1)*nb], bins = maxdist+1,
+                    range = (-0.5, maxdist+0.5))[0]
+
+            counttime = timer()-start
+
+            #print(f'ij {ii} {jj} {disttime:.2f} {counttime:.2f} {timer()-start0:.2f}')
+
+    return dist_counts
+
+def compute_background_paired_tcrdist_distributions(
+        fg_avecs,
+        fg_bvecs,
+        bg_avecs,
+        bg_bvecs,
+        maxdist,
+        rowstep = 5000,
+        colstep = 50000,
+):
+    ''' Compute the background paired tcrdist distribution by taking the
+    convolution of the alpha and beta single-chain tcrdist distributions
+    '''
+
+    num_fg_tcrs = fg_avecs.shape[0]
+    num_bg_tcrs = bg_avecs.shape[0]
+    assert num_fg_tcrs == fg_bvecs.shape[0]
+    assert num_bg_tcrs == bg_bvecs.shape[0]
+
+    acounts = compute_background_single_tcrdist_distributions(
+        fg_avecs, bg_avecs, maxdist, rowstep=rowstep, colstep=colstep)
+
+    bcounts = compute_background_single_tcrdist_distributions(
+        fg_bvecs, bg_bvecs, maxdist, rowstep=rowstep, colstep=colstep)
+
+    abcounts = np.zeros((num_fg_tcrs, maxdist+1), dtype=int)
+
+    assert acounts.shape == bcounts.shape == abcounts.shape
+
+    for d in range(maxdist+1):
+        for adist in range(d+1):
+            abcounts[:,d] += acounts[:,adist] * bcounts[:,d-adist]
+
+    return abcounts
 
