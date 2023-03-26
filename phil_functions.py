@@ -621,6 +621,16 @@ def compute_background_single_tcrdist_distributions(
         rowstep = 5000,
         colstep = 50000,
 ):
+    ''' Compute the histogram of distances to bg_vecs for each vector in fg_vecs
+
+    returns an integer-valued numpy array of shape (num_fg_tcrs, maxdist+1)
+
+    histogram bin-size is 1.0
+
+    first bin is (-0.5, 0.5), last bin is (maxdist-0.5, maxdist+0.5)
+
+    for alphabeta tcr clumping, I use maxdist=96
+    '''
     dim = fg_vecs.shape[1]
     assert dim == bg_vecs.shape[1]
     num_fg = fg_vecs.shape[0]
@@ -677,6 +687,12 @@ def compute_background_paired_tcrdist_distributions(
 ):
     ''' Compute the background paired tcrdist distribution by taking the
     convolution of the alpha and beta single-chain tcrdist distributions
+
+    returns an integer-valued numpy array of shape (num_fg_tcrs, maxdist+1)
+
+    histogram bin-size is 1.0
+
+    first bin is (-0.5, 0.5), last bin is (maxdist-0.5, maxdist+0.5)
     '''
 
     num_fg_tcrs = fg_avecs.shape[0]
