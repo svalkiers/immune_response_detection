@@ -8,6 +8,12 @@ import random
 from .datasets import sample_tcrs
 from .modules.olga import load_model, sequence_generation
 from .modules.olga.sequence_generation import SequenceGenerationVDJ
+from .modules.olga import sequence_generation, load_model, olga_directed
+
+from os.path import dirname, abspath, join
+
+ROOT = dirname(dirname(dirname(abspath(__file__))))
+MODELS = join(ROOT,'raptcr/constants/modules/olga/default_models/human_T_beta/')
 
 def get_vfam(df, vcol='v_call'):
     '''
@@ -216,19 +222,21 @@ def compare_frequencies(seq_source, seq_bg_matched):
 
     return vcounts, jcounts, len_counts
 
-from os.path import dirname, abspath, join
-from raptcr.constants.modules.olga import sequence_generation, load_model, olga_directed
-
-ROOT = dirname(dirname(dirname(abspath(__file__))))
-MODELS = join(ROOT,'raptcr/constants/modules/olga/default_models/human_T_beta/')
-
 class SyntheticBackground():
-
     def __init__(self, repertoire, n, ncpus:int=1):
-
+        '''
+        Class for creating synthetic backgrounds that match certain properties of the
+        input repertoire.
+        '''
         self.repertoire = repertoire
         self.n = n
+        self._setup_gene_ref()
+        self._setup_olga()
+        self._add_v_gene_column()
+        self.v_genes = self.repertoire.v_gene.unique()
+        self.size = len(self.repertoire)
 
+        # Configure number of threads
         if ncpus == -1:
             self.ncpus = mp.cpu_count()
         elif ncpus >= mp.cpu_count():
@@ -237,18 +245,16 @@ class SyntheticBackground():
             assert ncpus > 0, 'Number of CPUs must be greater than 0.'
             self.ncpus = ncpus
 
-        self._setup_gene_ref()
-        self._setup_olga()
-        self._add_v_gene_column()
-
-        self.v_genes = self.repertoire.v_gene.unique()
-        self.size = len(self.repertoire)
-
     def _add_v_gene_column(self):
+        '''
+        Add a V gene column to the repertoire file by parsing the V allele (v_call) column.
+        '''
         self.repertoire['v_gene'] = self.repertoire.v_call.apply(lambda x: x.split('*')[0])
 
     def _setup_olga(self):
-
+        '''
+        Configure OLGA marginals and model parameters.
+        '''
         params_file_name = join(MODELS,'model_params.txt')
         marginals_file_name = join(MODELS,'model_marginals.txt')
         V_anchor_pos_file = join(MODELS,'V_gene_CDR3_anchors.csv')
@@ -262,46 +268,73 @@ class SyntheticBackground():
 
     def _setup_gene_ref(self):
         '''
+        Setup reference database 
         !NOTE! the following V alleles have been removed from the reference:
             - TRBV7-2*03 (71)
             - TRBV7-3*04 (76)
             - TRBV15*03 (22)
             - TRBV4-3*02 (48)
         '''
-        # !NOTE: remove the following   -> causing errors to seq gen model
         func_v_genes = pd.read_csv(join(MODELS,'functional_V_genes.csv'), index_col=[0])
-        # func_j_genes = pd.read_csv(join(OLGA,location,'functional_J_genes.csv'))
+        func_j_genes = pd.read_csv(join(MODELS,'functional_J_genes.csv'), index_col=[0])
         self.v_gene_ref = {v:func_v_genes[func_v_genes.gene==v].allele.to_list() for v in func_v_genes.gene.unique()}
-        # self.j_gene_ref = {j:func_j_genes[func_j_genes.gene==j].allele.to_list() for j in func_j_genes.gene.unique()}
-
+        self.j_gene_ref = {j:func_j_genes[func_j_genes.gene==j].allele.to_list() for j in func_j_genes.gene.unique()}
         self.v_allele_ref = dict(zip(func_v_genes.allele, func_v_genes.index))
-        # self.j_allele_ref = dict(zip(func_j_genes.allele, func_j_genes.index))
+        self.j_allele_ref = dict(zip(func_j_genes.allele, func_j_genes.index))
 
     def generate_sequence_vj(self, v=None, j=None):
-        seq_gen_model = olga_directed.SequenceGenerationVDJ(self.generative_model, self.genomic_data)
-        if not '*' in v:
-            v = random.choice(self.v_gene_ref[v])
-        v_id = self.v_allele_ref[v]
-        # if not '*' in j:
-            # j = random.choice(self.j_gene_ref[v])
+        '''
+        Generate a VDJ sequence using the OLGA human TRB model, specifying
+        V and/or J gene selection.
+        '''
+        v_id = v
+        j_id = j
+        seq_gen_model = olga_directed.SequenceGenerationVDJ(self.generative_model, self.genomic_data)\
+        if v is not None:
+            if not '*' in v:
+                v = random.choice(self.v_gene_ref[v])
+            v_id = self.v_allele_ref[v]
+        if j is not None:
+            if not '*' in j:
+                j = random.choice(self.j_gene_ref[v])
+            j_id = self.j_allele_ref[j]
         recomb = None
         while recomb is None:
-            recomb = seq_gen_model.gen_rnd_prod_CDR3(V=v_id, J=j)
+            recomb = seq_gen_model.gen_rnd_prod_CDR3(V=v_id, J=j_id)
         aaseq, v_id, j_id = recomb[1:4]
         v_allele = self.genomic_data.genV[v_id][0]
         j_allele = self.genomic_data.genJ[j_id][0]
         return aaseq, v_allele, j_allele
 
-    def gene_length_distribution(self, gene, feature='v_gene'):
+    def gene_length_distribution(self, gene:str, feature:str='v_gene'):
+        '''
+        Get CDR3 length distribution for all sequences with a specific V or J gene.
+
+        Parameters
+        ----------
+        gene: str
+            Name of the gene.
+        feature: str
+            Name of the column containing the V or J genes. Default is v_gene.
+        '''
         v_len_counts = self.repertoire[self.repertoire[feature]==gene].junction_aa.str.len().value_counts()
         return (v_len_counts / self.size * self.n).astype(int)
 
-    def bin_sequences(self, v_gene=None, j_gene=None):
+    def bin_sequences(self, v_gene:str=None, j_gene:str=None):
+        '''
+        AR sampling method for matching the CDR3 length distribution 
+        for a specific V or J gene.
+
+        Parameters
+        ----------
+        v_gene: str
+            V gene.
+        j_gene: str
+            J gene.
+        '''
         n_required = self.gene_length_distribution(gene=v_gene)
-        c = 0
         res = []
         while sum(n_required) > 0:
-            c += 1
             aa, v, j = self.generate_sequence_vj(v=v_gene, j=j_gene)
             if len(aa) in n_required.index:
                 if n_required.loc[len(aa)] > 0:
@@ -310,6 +343,10 @@ class SyntheticBackground():
         return pd.DataFrame(res, columns=['junction_aa', 'v_call', 'j_call'])
 
     def match_per_v_gene(self):
+        '''
+        Generate a synthetic repertoire that matches the foreground CDR3 length distributions 
+        per V gene.
+        '''
         if self.ncpus == 1:
             sampled = [self.bin_sequences(v_gene=v) for v in self.v_genes]
         else:
@@ -317,6 +354,24 @@ class SyntheticBackground():
                 sampled = parmap.map(
                     self.bin_sequences,
                     self.v_genes,
+                    np.random.seed(),
+                    pm_parallel=True,
+                    pm_pool=pool
+                )
+        return pd.concat(sampled)
+
+    def match_per_j_gene(self):
+        '''
+        Generate a synthetic repertoire that matches the foreground CDR3 length distributions 
+        per J gene.
+        '''
+        if self.ncpus == 1:
+            sampled = [self.bin_sequences(j_gene=j) for j in self.j_genes]
+        else:
+            with mp.Pool(self.ncpus) as pool:
+                sampled = parmap.map(
+                    self.bin_sequences,
+                    self.j_genes,
                     np.random.seed(),
                     pm_parallel=True,
                     pm_pool=pool
