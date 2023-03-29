@@ -1,12 +1,13 @@
 import pandas as pd
 import numpy as np
 import math
-import multiprocessing
+import multiprocessing as mp
 import parmap
 import random
 
 from .datasets import sample_tcrs
-from .modules.OLGA.olga import load_model, sequence_generation
+from .modules.olga import load_model, sequence_generation
+from .modules.olga.sequence_generation import SequenceGenerationVDJ
 
 def get_vfam(df, vcol='v_call'):
     '''
@@ -84,7 +85,7 @@ def _setup_olga_models():
     return genomic_data, generative_model
 
 def generate_olga_sequences(n, genomic_data, generative_model):
-    seq_gen_model = sequence_generation.SequenceGenerationVDJ(generative_model, genomic_data)
+    seq_gen_model = SequenceGenerationVDJ(generative_model, genomic_data)
     colnames = ['junction','junction_aa','v_call','j_call']
     df = pd.DataFrame([seq_gen_model.gen_rnd_prod_CDR3() for i in range(n)], columns=colnames)
     df['v_call'] = df['v_call'].apply(lambda x: genomic_data.genV[x][0])
@@ -93,7 +94,9 @@ def generate_olga_sequences(n, genomic_data, generative_model):
     df['j_gene'] = df['j_call'].apply(lambda x: x.split('*')[0])
     return df
 
-def generate_olga_sequences_multi(total, chunks, genomic_data, generative_model, ncpus=1):
+def generate_olga_sequences_multi(total, chunks, genomic_data=None, generative_model=None, ncpus=1):
+    if genomic_data is None and generative_model is None:
+        genomic_data, generative_model = _setup_olga_models()
     with multiprocessing.Pool(ncpus) as pool:
         seq = parmap.map(
             generate_olga_sequences,
@@ -158,17 +161,19 @@ def matched_property_sampling(repertoire, total, chunksize, ncpus=8):
         sample['p_j'] = sample.j_gene.apply(lambda j: get_prob(j,p_j))
         sample['w_tcr'] = sample['p_l'] * sample['p_v'] * sample['p_j']
         weights = sample.w_tcr.to_list()
-        while sum(weights) <= 0:
-            sample = generate_olga_sequences_multi(
-                total=chunksize*5, chunks=int(chunksize/5),
-                genomic_data=genomic_data, generative_model=generative_model,
-                ncpus=ncpus
-                )
-            sample['p_l'] = sample.junction_aa.apply(lambda cdr3: get_prob(len(cdr3),p_len))
-            sample['p_v'] = sample.v_gene.apply(lambda v: get_prob(v,p_v))
-            sample['p_j'] = sample.j_gene.apply(lambda j: get_prob(j,p_j))
-            sample['w_tcr'] = sample['p_l'] * sample['p_v'] * sample['p_j']
-            weights = sample.w_tcr.to_list()
+        # while sum(weights) <= 0:
+        #     sample = generate_olga_sequences_multi(
+        #         total=chunksize*10, chunks=int(chunksize),
+        #         genomic_data=genomic_data, generative_model=generative_model,
+        #         ncpus=ncpus
+        #         )
+        #     sample['p_l'] = sample.junction_aa.apply(lambda cdr3: get_prob(len(cdr3),p_len))
+        #     sample['p_v'] = sample.v_gene.apply(lambda v: get_prob(v,p_v))
+        #     sample['p_j'] = sample.j_gene.apply(lambda j: get_prob(j,p_j))
+        #     sample['w_tcr'] = sample['p_l'] * sample['p_v'] * sample['p_j']
+        #     weights = sample.w_tcr.to_list()
+        if sum(weights) <= 0:
+            return p_v, p_j, p_len
         tcr_ids = sample.index
         # Sample from background
         selected = random.choices(tcr_ids, weights=weights, k=chunksize)
@@ -183,3 +188,137 @@ def matched_property_sampling(repertoire, total, chunksize, ncpus=8):
             break
     cols = ['junction','junction_aa','v_call','v_gene','j_call','j_gene']
     return pd.concat(background).reset_index(drop=True)[cols]
+
+def compare_frequencies(seq_source, seq_bg_matched):
+
+    seq_source['v_gene'] = seq_source.v_call.apply(lambda x: x.split('*')[0])
+    seq_source['j_gene'] = seq_source.j_call.apply(lambda x: x.split('*')[0])
+    seq_bg_matched['v_gene'] = seq_bg_matched.v_call.apply(lambda x: x.split('*')[0])
+    seq_bg_matched['j_gene'] = seq_bg_matched.j_call.apply(lambda x: x.split('*')[0])
+
+    vcounts_source = (seq_source.v_gene.value_counts() / len(seq_source))
+    vcounts_matched = (seq_bg_matched.v_gene.value_counts() / len(seq_bg_matched))
+    vcounts = pd.concat([vcounts_source, vcounts_matched], axis=1).reset_index()
+    vcounts.columns = ['v', 'source', 'matched']
+    vcounts = pd.melt(vcounts, id_vars=['v'], value_vars=['source', 'matched'])
+
+    jcounts_source = (seq_source.j_gene.value_counts() / len(seq_source))
+    jcounts_matched = (seq_bg_matched.j_gene.value_counts() / len(seq_bg_matched))
+    jcounts = pd.concat([jcounts_source, jcounts_matched], axis=1).reset_index()
+    jcounts.columns = ['j', 'source', 'matched']
+    jcounts = pd.melt(jcounts, id_vars=['j'], value_vars=['source', 'matched'])
+
+    counts_source = seq_source.junction_aa.str.len().value_counts().sort_index() / len(seq_source)
+    counts_matched = seq_bg_matched.junction_aa.str.len().value_counts().sort_index() / len(seq_bg_matched)
+    len_counts = pd.concat([counts_source, counts_matched], axis=1).reset_index()
+    len_counts.columns = ['length', 'source', 'matched']
+    len_counts = pd.melt(len_counts, id_vars=['length'], value_vars=['source', 'matched'])
+
+    return vcounts, jcounts, len_counts
+
+from os.path import dirname, abspath, join
+from raptcr.constants.modules.olga import sequence_generation, load_model, olga_directed
+
+ROOT = dirname(dirname(dirname(abspath(__file__))))
+MODELS = join(ROOT,'raptcr/constants/modules/olga/default_models/human_T_beta/')
+
+class SyntheticBackground():
+
+    def __init__(self, repertoire, n, ncpus:int=1):
+
+        self.repertoire = repertoire
+        self.n = n
+
+        if ncpus == -1:
+            self.ncpus = mp.cpu_count()
+        elif ncpus >= mp.cpu_count():
+            self.ncpus = mp.cpu_count()
+        else:
+            assert ncpus > 0, 'Number of CPUs must be greater than 0.'
+            self.ncpus = ncpus
+
+        self._setup_gene_ref()
+        self._setup_olga()
+        self._add_v_gene_column()
+
+        self.v_genes = self.repertoire.v_gene.unique()
+        self.size = len(self.repertoire)
+
+    def _add_v_gene_column(self):
+        self.repertoire['v_gene'] = self.repertoire.v_call.apply(lambda x: x.split('*')[0])
+
+    def _setup_olga(self):
+
+        params_file_name = join(MODELS,'model_params.txt')
+        marginals_file_name = join(MODELS,'model_marginals.txt')
+        V_anchor_pos_file = join(MODELS,'V_gene_CDR3_anchors.csv')
+        J_anchor_pos_file = join(MODELS,'J_gene_CDR3_anchors.csv')
+    
+        self.genomic_data = load_model.GenomicDataVDJ()
+        self.genomic_data.load_igor_genomic_data(params_file_name, V_anchor_pos_file, J_anchor_pos_file)
+
+        self.generative_model = load_model.GenerativeModelVDJ()
+        self.generative_model.load_and_process_igor_model(marginals_file_name)
+
+    def _setup_gene_ref(self):
+        '''
+        !NOTE! the following V alleles have been removed from the reference:
+            - TRBV7-2*03 (71)
+            - TRBV7-3*04 (76)
+            - TRBV15*03 (22)
+            - TRBV4-3*02 (48)
+        '''
+        # !NOTE: remove the following   -> causing errors to seq gen model
+        func_v_genes = pd.read_csv(join(MODELS,'functional_V_genes.csv'), index_col=[0])
+        # func_j_genes = pd.read_csv(join(OLGA,location,'functional_J_genes.csv'))
+        self.v_gene_ref = {v:func_v_genes[func_v_genes.gene==v].allele.to_list() for v in func_v_genes.gene.unique()}
+        # self.j_gene_ref = {j:func_j_genes[func_j_genes.gene==j].allele.to_list() for j in func_j_genes.gene.unique()}
+
+        self.v_allele_ref = dict(zip(func_v_genes.allele, func_v_genes.index))
+        # self.j_allele_ref = dict(zip(func_j_genes.allele, func_j_genes.index))
+
+    def generate_sequence_vj(self, v=None, j=None):
+        seq_gen_model = olga_directed.SequenceGenerationVDJ(self.generative_model, self.genomic_data)
+        if not '*' in v:
+            v = random.choice(self.v_gene_ref[v])
+        v_id = self.v_allele_ref[v]
+        # if not '*' in j:
+            # j = random.choice(self.j_gene_ref[v])
+        recomb = None
+        while recomb is None:
+            recomb = seq_gen_model.gen_rnd_prod_CDR3(V=v_id, J=j)
+        aaseq, v_id, j_id = recomb[1:4]
+        v_allele = self.genomic_data.genV[v_id][0]
+        j_allele = self.genomic_data.genJ[j_id][0]
+        return aaseq, v_allele, j_allele
+
+    def gene_length_distribution(self, gene, feature='v_gene'):
+        v_len_counts = self.repertoire[self.repertoire[feature]==gene].junction_aa.str.len().value_counts()
+        return (v_len_counts / self.size * self.n).astype(int)
+
+    def bin_sequences(self, v_gene=None, j_gene=None):
+        n_required = self.gene_length_distribution(gene=v_gene)
+        c = 0
+        res = []
+        while sum(n_required) > 0:
+            c += 1
+            aa, v, j = self.generate_sequence_vj(v=v_gene, j=j_gene)
+            if len(aa) in n_required.index:
+                if n_required.loc[len(aa)] > 0:
+                    res.append((aa,v,j))
+                    n_required.loc[len(aa)] -= 1
+        return pd.DataFrame(res, columns=['junction_aa', 'v_call', 'j_call'])
+
+    def match_per_v_gene(self):
+        if self.ncpus == 1:
+            sampled = [self.bin_sequences(v_gene=v) for v in self.v_genes]
+        else:
+            with mp.Pool(self.ncpus) as pool:
+                sampled = parmap.map(
+                    self.bin_sequences,
+                    self.v_genes,
+                    np.random.seed(),
+                    pm_parallel=True,
+                    pm_pool=pool
+                )
+        return pd.concat(sampled)
