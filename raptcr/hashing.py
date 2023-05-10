@@ -177,6 +177,7 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         self,
         distance_matrix:np.array=TCRDIST_DM, 
         aa_dim:int=8,
+        mds_eps:float=1e-05,
         num_pos:int=16,
         n_trim:int=3,
         c_trim:int=2,
@@ -220,11 +221,15 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         """
         self.distance_matrix = distance_matrix
         self.aa_dim = aa_dim
+        self.mds_eps = mds_eps
         self.num_pos = num_pos
         self.n_trim = n_trim
         self.c_trim = c_trim
         self.cdr3_weight = cdr3_weight
         self.organism = organism
+
+        allowed_chains = ['a','b','alpha','beta']
+        assert chain.lower() in allowed_chains, f'Invalid chain {chain}, please select alpha or beta.'
         self.chain = chain
         
         self.full_tcr = full_tcr
@@ -242,6 +247,7 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         '''
         mds = MDS(
             n_components=self.aa_dim,
+            eps=self.mds_eps,
             dissimilarity="precomputed",
             random_state=11,
             normalized_stress=False
@@ -350,8 +356,10 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         assert vecs.shape == (self.tcrs.shape[0], vec_len)
         return vecs
 
-    # def _():
-
+    def encode_tcr(self, v, cdr3):
+        v_vec = self._encode_sequence(self.gene_cdr_strings[v])
+        cdr3_vec = np.sqrt(self.cdr3_weight) * self._gapped_encode_cdr3(cdr3)
+        return np.concatenate([v_vec,cdr3_vec])
 
     def fit(self, X=None, y=None):
         self.aa_vectors_ = self._calc_tcrdist_aa_vectors()

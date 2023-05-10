@@ -4,16 +4,18 @@ import math
 import multiprocessing as mp
 import parmap
 import random
+import itertools
 
-from .datasets import sample_tcrs
-from .modules.olga import load_model, sequence_generation
-from .modules.olga.sequence_generation import SequenceGenerationVDJ
-from .modules.olga import sequence_generation, load_model, olga_directed
+from .constants.datasets import sample_tcrs
+from .constants.modules.olga import load_model, sequence_generation
+from .constants.modules.olga.sequence_generation import SequenceGenerationVDJ
+from .constants.modules.olga import sequence_generation, load_model, olga_directed
+from .constants.modules.tcrdist.tcr_sampler import parse_tcr_junctions
 
 from os.path import dirname, abspath, join
 
 ROOT = dirname(dirname(dirname(abspath(__file__))))
-MODELS = join(ROOT,'raptcr/constants/modules/olga/default_models/human_T_beta/')
+MODELS = join(ROOT,'immune_response_detection/raptcr/constants/modules/olga/default_models/human_T_beta/')
 
 def get_vfam(df, vcol='v_call'):
     '''
@@ -77,10 +79,10 @@ def match_vj_distribution(n:int, foreground:pd.DataFrame, background:pd.DataFram
 
 def _setup_olga_models():
 
-    params_file_name = './raptcr/constants/modules/OLGA/olga/default_models/human_T_beta/model_params.txt'
-    marginals_file_name = './raptcr/constants/modules/OLGA/olga/default_models/human_T_beta/model_marginals.txt'
-    V_anchor_pos_file ='./raptcr/constants/modules/OLGA/olga/default_models/human_T_beta/V_gene_CDR3_anchors.csv'
-    J_anchor_pos_file = './raptcr/constants/modules/OLGA/olga/default_models/human_T_beta/J_gene_CDR3_anchors.csv'
+    params_file_name = './raptcr/constants/modules/olga/default_models/human_T_beta/model_params.txt'
+    marginals_file_name = './raptcr/constants/modules/olga/default_models/human_T_beta/model_marginals.txt'
+    V_anchor_pos_file ='./raptcr/constants/modules/olga/default_models/human_T_beta/V_gene_CDR3_anchors.csv'
+    J_anchor_pos_file = './raptcr/constants/modules/olga/default_models/human_T_beta/J_gene_CDR3_anchors.csv'
 
     genomic_data = load_model.GenomicDataVDJ()
     genomic_data.load_igor_genomic_data(params_file_name, V_anchor_pos_file, J_anchor_pos_file)
@@ -222,6 +224,27 @@ def compare_frequencies(seq_source, seq_bg_matched):
 
     return vcounts, jcounts, len_counts
 
+    # def parse_junctions_for_background_resampling(df, organism, chain):
+    #     ''' 
+    #     Setup for the "resample_background_tcrs_v4" function by parsing
+    #     the V(D)J junctions in the foreground tcr set
+
+    #     returns a dataframe with info
+    #     '''
+    #     from tcrdist.tcr_sampler import parse_tcr_junctions
+
+    #     # tcrdist parsing function expects paired tcrs as list of tuples of tuples
+    #     cols = ['v_call', 'j_call', 'junction_aa', 'junction']
+    #     tcr_tuples = df[cols].itertuples(name=None, index=None)
+    #     if chain == 'A':
+    #         tcr_tuples = zip(tcr_tuples, itertools.repeat(None))
+    #     else:
+    #         tcr_tuples = zip(itertools.repeat(None), tcr_tuples)
+
+    #     junctions = parse_tcr_junctions(organism, list(tcr_tuples))
+    #     #junctions = add_vdj_splits_info_to_junctions(junctions)
+    #     return junctions
+
 class SyntheticBackground():
     def __init__(self, repertoire, n, ncpus:int=1):
         '''
@@ -233,6 +256,7 @@ class SyntheticBackground():
         self._setup_gene_ref()
         self._setup_olga()
         self._add_v_gene_column()
+        self._add_j_gene_column()
         self.v_genes = self.repertoire.v_gene.unique()
         self.size = len(self.repertoire)
 
@@ -250,6 +274,12 @@ class SyntheticBackground():
         Add a V gene column to the repertoire file by parsing the V allele (v_call) column.
         '''
         self.repertoire['v_gene'] = self.repertoire.v_call.apply(lambda x: x.split('*')[0])
+
+    def _add_j_gene_column(self):
+        '''
+        Add a J gene column to the repertoire file by parsing the J allele (j_call) column.
+        '''
+        self.repertoire['j_gene'] = self.repertoire.j_call.apply(lambda x: x.split('*')[0])
 
     def _setup_olga(self):
         '''
@@ -289,14 +319,14 @@ class SyntheticBackground():
         '''
         v_id = v
         j_id = j
-        seq_gen_model = olga_directed.SequenceGenerationVDJ(self.generative_model, self.genomic_data)\
+        seq_gen_model = olga_directed.SequenceGenerationVDJ(self.generative_model, self.genomic_data)
         if v is not None:
             if not '*' in v:
                 v = random.choice(self.v_gene_ref[v])
             v_id = self.v_allele_ref[v]
         if j is not None:
             if not '*' in j:
-                j = random.choice(self.j_gene_ref[v])
+                j = random.choice(self.j_gene_ref[j])
             j_id = self.j_allele_ref[j]
         recomb = None
         while recomb is None:
@@ -377,3 +407,155 @@ class SyntheticBackground():
                     pm_pool=pool
                 )
         return pd.concat(sampled)
+
+    def full_match(self):
+
+        # Initialize probabilities
+        sampling_probabilities_v = self.repertoire.v_gene.value_counts() / self.size
+        v_necessary = sampling_probabilities_v * self.n
+        sampling_probabilities_j = self.repertoire.j_gene.value_counts() / self.size
+        j_necessary = sampling_probabilities_j * self.n
+        sampling_probabilities_len = self.repertoire.junction_aa.str.len().value_counts() / self.size
+        len_necessary = sampling_probabilities_len * self.n
+        for i in range(41):
+            if i not in len_necessary.index:
+                len_necessary.loc[i] = 0
+
+        res = []
+        nsample = self.n
+
+        for i in range(self.n):
+            recombination = None
+            while recombination is None:
+                vchoice = random.choices(v_necessary.keys(), v_necessary.values, k=1)[0]
+                jchoice = random.choices(j_necessary.keys(), j_necessary.values, k=1)[0]
+                recombination = self.generate_sequence_vj(v=vchoice, j=jchoice)
+                # recombination = olga_sequence(vgene=vchoice, jgene=jchoice, vref=vref, jref=jref, seq_gen_model=seq_gen_model)
+            aaseq, v, j = recombination
+
+            while len_necessary[len(aaseq)] <= 0:
+                recombination = self.generate_sequence_vj(v=vchoice, j=jchoice)
+                # recombination = olga_sequence(vgene=vchoice, jgene=jchoice, vref=vref, jref=jref, seq_gen_model=seq_gen_model)
+                if recombination is not None:
+                    aaseq, v, j = recombination
+                else:
+                    pass
+
+            res.append(recombination)
+            len_necessary[len(aaseq)] -= 1
+            if len_necessary[len(aaseq)] <= 0:
+                len_necessary[len(aaseq)] = 0
+
+            v_necessary[vchoice] -= 1
+            if v_necessary[vchoice] <= 0:
+                v_necessary[vchoice] = 0
+            j_necessary[jchoice] -= - 1
+            if j_necessary[jchoice] <= 0:
+                j_necessary[jchoice] = 0
+
+            nsample -= 1
+            if nsample <= 0:
+                break
+            
+            # Update 'probabilities'
+            sampling_probabilities_v = self.repertoire.v_gene.value_counts() / nsample
+            sampling_probabilities_j = self.repertoire.j_gene.value_counts() / nsample
+
+        cols = ['junction_aa','v_call','j_call']
+        return pd.DataFrame(res, columns=cols)
+
+
+def get_gene_id(gene, ref):
+    gene = gene.split('*')[0]
+    assert gene in list(ref.gene), f'Unknown gene: {vgene}.'
+    return int(random.choice(ref[ref['gene']==gene].index))
+
+def olga_sequence(seq_gen_model, vgene=None, jgene=None, vref=None, jref=None):
+    if vgene is not None:
+        vid = int(get_gene_id(vgene, vref))
+    else:
+        vid = vgene
+    if jgene is not None:
+        jid = int(get_gene_id(jgene, jref))
+    else:
+        jid = jgene
+    # recombination = None
+    # while recombination is None:
+    recombination = seq_gen_model.gen_rnd_prod_CDR3(V=vid, J=jid)
+    if recombination is None:
+        return None
+    else:
+        cdr3_nt_out = recombination[0]
+        cdr3_aa_out = recombination[1]
+        v_out = vref.loc[recombination[2]].v_allele
+        j_out = jref.loc[recombination[3]].j_allele
+        return (cdr3_nt_out, cdr3_aa_out, v_out, j_out)
+
+def directed_sampling(df, nsample):
+
+    from raptcr.constants.modules.olga import olga_directed
+
+    genomic_data, generative_model = _setup_olga_models()
+    seq_gen_model = olga_directed.SequenceGenerationVDJ(generative_model, genomic_data)
+    
+    # Setup V gene reference
+    vref = pd.DataFrame(genomic_data.genV, columns=['v_allele', 'ntseq1', 'ntseq2'])
+    vref['gene'] = vref.v_allele.apply(lambda x: x.split('*')[0])
+    v_anchor = pd.read_csv('./raptcr/constants/modules/olga/default_models/human_T_beta/V_gene_CDR3_anchors.csv')
+    vref = vref[vref.v_allele.isin(v_anchor[v_anchor.function=='F'].gene)]
+    # Setup J gene reference
+    jref = pd.DataFrame(genomic_data.genJ, columns=['j_allele', 'ntseq1', 'ntseq2'])
+    jref['gene'] = jref.j_allele.apply(lambda x: x.split('*')[0])
+    j_anchor = pd.read_csv('./raptcr/constants/modules/olga/default_models/human_T_beta/J_gene_CDR3_anchors.csv')
+    jref = jref[jref.j_allele.isin(j_anchor[j_anchor.function=='F'].gene)]
+
+    # Initialize probabilities
+    sampling_probabilities_v = df.v_call.value_counts() / len(df)
+    v_necessary = sampling_probabilities_v * nsample
+    sampling_probabilities_j = df.j_call.value_counts() / len(df)
+    j_necessary = sampling_probabilities_j * nsample
+    sampling_probabilities_len = df.junction_aa.str.len().value_counts() / len(df)
+    len_necessary = sampling_probabilities_len * nsample
+    for i in range(41):
+        if i not in len_necessary.index:
+            len_necessary.loc[i] = 0
+
+    res = []
+
+    for i in range(nsample):
+        recombination = None
+        while recombination is None:
+            vchoice = random.choices(v_necessary.keys(), v_necessary.values, k=1)[0]
+            jchoice = random.choices(j_necessary.keys(), j_necessary.values, k=1)[0]
+            recombination = olga_sequence(vgene=vchoice, jgene=jchoice, vref=vref, jref=jref, seq_gen_model=seq_gen_model)
+        nucseq, aaseq, v, j = recombination
+
+        while len_necessary[len(aaseq)] <= 0:
+            recombination = olga_sequence(vgene=vchoice, jgene=jchoice, vref=vref, jref=jref, seq_gen_model=seq_gen_model)
+            if recombination is not None:
+                nucseq, aaseq, v, j = recombination
+            else:
+                pass
+
+        res.append(recombination)
+        len_necessary[len(aaseq)] -= 1
+        if len_necessary[len(aaseq)] <= 0:
+            len_necessary[len(aaseq)] = 0
+
+        v_necessary[vchoice] -= 1
+        if v_necessary[vchoice] <= 0:
+            v_necessary[vchoice] = 0
+        j_necessary[jchoice] -= - 1
+        if j_necessary[jchoice] <= 0:
+            j_necessary[jchoice] = 0
+
+        nsample -= 1
+        if nsample <= 0:
+            break
+        
+        # Update 'probabilities'
+        sampling_probabilities_v = df.v_call.value_counts() / nsample
+        sampling_probabilities_j = df.j_call.value_counts() / nsample
+
+    cols = ['junction','junction_aa','v_call','j_call']
+    return pd.DataFrame(res, columns=cols)
