@@ -52,4 +52,4 @@ DEFAULT_DM = blosum_to_distance_matrix(BLOSUM_62)
 # going to use an L2 (Euclidean) distance in the embedding space...
 # Also, turns out that when we take the sqrt it does satisfy the triangle
 # inequality, which this "squared" version doesn't do.
-TCRDIST_DM = np.sqrt(np.maximum(0., np.minimum(4., 4-BLOSUM_62)))
+TCRDIST_DM = np.maximum(0., np.minimum(4., 4-BLOSUM_62))
