@@ -231,7 +231,7 @@ def read_paired_data(fname):
 ######################################################################################88
 
 
-if 1: # test background resampling functions
+if 0: # test background resampling functions
 
     fname = ('/home/pbradley/gitrepos/immune_response_detection/'
              'data/phil/britanova/A5-S18.txt.gz')
@@ -922,6 +922,132 @@ if 0: # filter the tcrs from the round4 merged file
 
     exit()
 
+if 1: # setup for some knn searches from vector inputs (here metaconga GEX pcs)
+    # multi-runtag version
+    PY = '/home/pbradley/miniconda3/envs/raptcr/bin/python'
+    EXE = '/home/pbradley/gitrepos/immune_response_detection/phil_running.py'
+
+    job_size = 10000
+    xargs = ' --sleeptime 30 '
+    mode = 'vector_knns'
+    num_nbrs = 501
+    bcdir = '/home/pbradley/csdat/big_covid/'
+
+    runtags = 'run40 run41 run42 run43'.split()
+    vecs_files = [bcdir+x for x in '''
+round4_v3b_300_process_v1_leiden2_gex_pcs.npy
+round4_v3b_400_process_v1_leiden2_gex_pcs.npy
+round4_v3b_500_process_v1_leiden2_gex_pcs.npy
+round4_v3b_run69_208_process_v1_leiden2_gex_pcs.npy
+    '''.split() if x]
+    expected_vecs_shape = (662874, 20)
+    assert len(runtags) == len(vecs_files)
+
+    for runtag,vecs_file in zip(runtags, vecs_files):
+
+        rundir = f'/home/pbradley/csdat/raptcr/slurm/{runtag}/'
+        if not exists(rundir):
+            mkdir(rundir)
+
+        cmds_file = f'{rundir}{runtag}_commands.txt'
+        assert not exists(cmds_file)
+        out = open(cmds_file,'w')
+
+        print('reading:', vecs_file)
+        vecs = np.load(vecs_file)
+        assert vecs.shape == expected_vecs_shape
+        num_tcrs = vecs.shape[0]
+
+        num_jobs = (num_tcrs-1)//job_size+1
+
+        xxargs = f' --num_nbrs {num_nbrs} '
+
+        for job in range(num_jobs):
+            start = job*job_size
+            stop = (job+1)*job_size
+
+            outfile_prefix = f'{rundir}{runtag}_{job}'
+            cmd = (f'{PY} {EXE} {xargs} {xxargs} --mode {mode} '
+                   f' --filename {vecs_file} '
+                   f' --start_index {start} --stop_index {stop} '
+                   f' --outfile_prefix {outfile_prefix} '
+                   f' > {outfile_prefix}.log 2> {outfile_prefix}.err')
+            out.write(cmd+'\n')
+        out.close()
+        print('made:', cmds_file)
+    exit()
+
+
+if 0: # setup for some knn searches from vector inputs (here metaconga GEX pcs)
+    PY = '/home/pbradley/miniconda3/envs/raptcr/bin/python'
+    EXE = '/home/pbradley/gitrepos/immune_response_detection/phil_running.py'
+
+    job_size = 10000
+    xargs = ' --sleeptime 30 '
+    mode = 'vector_knns'
+    num_nbrs = 501
+
+
+    runtag = 'run39' # KNN w/ GEX pcs for round4-combo, top200 hotspot genes
+    expected_vecs_shape = (647204, 20)
+    vecs_file='/home/pbradley/csdat/big_covid/round4_v3c_process_v1_leiden2_gex_pcs.npy'
+
+    # runtag = 'run37' # KNN w/ GEX pcs for round4-combo, top200 hotspot genes
+    # expected_vecs_shape = (2049073, 20)
+    # vecs_file='/home/pbradley/csdat/big_covid/round4_v4b_process_v1_leiden2_gex_pcs.npy'
+    # runtag = 'run36' # KNN w/ GEX pcs for round4-combo, top200 hotspot genes
+    # expected_vecs_shape = (662874, 20)
+    # vecs_file='/home/pbradley/csdat/big_covid/round4_v3b_process_v1_leiden2_gex_pcs.npy'
+
+    # runtag = 'run33' # KNN w/ GEX pcs for round4-combo, top200 hotspot genes
+    # expected_vecs_shape = (2165233, 20)
+    # vecs_file= '/home/pbradley/csdat/big_covid/round4_v4_process_v1_leiden2_gex_pcs.npy'
+
+    # runtag = 'run31' # KNN w/ GEX pcs for round4-combo, top200 hotspot genes
+    # expected_vecs_shape = (739702, 20)
+    # vecs_file= '/home/pbradley/csdat/big_covid/round4_v3_process_v1_leiden2_gex_pcs.npy'
+
+    # runtag = 'run30' # KNN w/ GEX pcs for round4-combo, top200 hotspot genes
+    # expected_vecs_shape = (2895305, 20)
+    #vecs_file='/home/pbradley/csdat/big_covid/round4_v2_process_v1_leiden2_gex_pcs.npy'
+
+    # runtag = 'run27' # KNN w/ GEX pcs for round4-combo, top200 hotspot genes
+    # expected_vecs_shape = (3064907, 20)
+    #vecs_file= '/home/pbradley/csdat/big_covid/round4_combo_hotspot_top200_gex_pcs.npy'
+
+    rundir = f'/home/pbradley/csdat/raptcr/slurm/{runtag}/'
+    if not exists(rundir):
+        mkdir(rundir)
+
+    cmds_file = f'{rundir}{runtag}_commands.txt'
+    assert not exists(cmds_file)
+    out = open(cmds_file,'w')
+
+    print('reading:', vecs_file)
+    vecs = np.load(vecs_file)
+    assert vecs.shape == expected_vecs_shape
+    num_tcrs = vecs.shape[0]
+
+    num_jobs = (num_tcrs-1)//job_size+1
+
+    xxargs = f' --num_nbrs {num_nbrs} '
+
+    for job in range(num_jobs):
+        start = job*job_size
+        stop = (job+1)*job_size
+
+        outfile_prefix = f'{rundir}{runtag}_{job}'
+        cmd = (f'{PY} {EXE} {xargs} {xxargs} --mode {mode} '
+               f' --filename {vecs_file} '
+               f' --start_index {start} --stop_index {stop} '
+               f' --outfile_prefix {outfile_prefix} '
+               f' > {outfile_prefix}.log 2> {outfile_prefix}.err')
+        out.write(cmd+'\n')
+    out.close()
+    print('made:', cmds_file)
+    exit()
+
+
 if 0: # setup for some range and knn searches
     PY = '/home/pbradley/miniconda3/envs/raptcr/bin/python'
     EXE = '/home/pbradley/gitrepos/immune_response_detection/phil_running.py'
@@ -931,7 +1057,35 @@ if 0: # setup for some range and knn searches
 
     mode = 'paired_knns'
     num_nbrs = 501
-    runtag = 'run26' # KNN w/ round4_merged_filt.tsv
+    runtag = 'run38'
+    filtfile = '/home/pbradley/csdat/big_covid/round4_v3c_filt_tcrs.tsv'
+
+    # mode = 'paired_knns'
+    # num_nbrs = 501
+    # runtag = 'run35'
+    # filtfile = '/home/pbradley/csdat/big_covid/round4_v4b_filt_tcrs.tsv'
+
+    # mode = 'paired_knns'
+    # num_nbrs = 501
+    # runtag = 'run34'
+    # filtfile = '/home/pbradley/csdat/big_covid/round4_v3b_filt_tcrs.tsv'
+
+    # mode = 'paired_knns'
+    # num_nbrs = 501
+    # runtag = 'run32' # KNN w/ round4_v4_filt_tcrs.tsv
+    # filtfile = '/home/pbradley/csdat/big_covid/round4_v4_filt_tcrs.tsv'
+
+    # mode = 'paired_knns'
+    # num_nbrs = 501
+    # runtag = 'run29' # KNN w/ round4_v3_filt_tcrs.tsv
+
+    # mode = 'paired_knns'
+    # num_nbrs = 501
+    # runtag = 'run28' # KNN w/ round4_v2_filt_tcrs.tsv
+
+    # mode = 'paired_knns'
+    # num_nbrs = 501
+    # runtag = 'run26' # KNN w/ round4_merged_filt.tsv
 
     # mode = 'paired_knns'
     # num_nbrs = 101
@@ -953,9 +1107,12 @@ if 0: # setup for some range and knn searches
 
     # bigfile = '/home/pbradley/csdat/big_covid/big_combo_tcrs_2023-03-07.tsv'
     # filtfile = f'{DATADIR}phil/paired_sample_filt.tsv'
-    filtfile = f'{DATADIR}phil/round4_merged_filt.tsv'
+    # filtfile = f'{DATADIR}phil/round4_merged_filt.tsv'
+    # filtfile = '/home/pbradley/csdat/big_covid/round4_v3_filt_tcrs.tsv'
+    # filtfile = '/home/pbradley/csdat/big_covid/round4_v2_filt_tcrs.tsv'
 
     if not exists(filtfile):
+        assert False
         print('reading:', bigfile)
         tcrs = pd.read_table(bigfile)
         print('read:', tcrs.shape[0], bigfile)

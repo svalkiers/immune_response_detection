@@ -395,6 +395,30 @@ elif args.mode == 'paired_backgrounds':
 
     np.save(args.outfile, ab_counts)
 
+elif args.mode == 'vector_knns':
+    sleeptime = args.sleeptime * random.random()
+    print('sleeping:', sleeptime)
+    time.sleep(sleeptime)
+
+    organism = 'human'
+    print('reading:', args.filename)
+    fg_vecs = np.load(args.filename)
+
+    qvecs = fg_vecs[args.start_index:args.stop_index]
+
+    print('start IndexFlatL2 knn search', args.num_nbrs, qvecs.shape, fg_vecs.shape)
+    start = timer()
+    idx = faiss.IndexFlatL2(fg_vecs.shape[1])
+    idx.add(fg_vecs)
+    D, I = idx.search(qvecs, args.num_nbrs)
+    print(f'IndexFlatL2 knn search took {timer()-start:.2f}')
+    outprefix = (f'{args.outfile_prefix}_{args.num_nbrs}_{args.start_index}_'
+                 f'{args.stop_index}_{fg_vecs.shape[0]}_{fg_vecs.shape[1]}')
+
+    np.save(f'{outprefix}_D.npy', D)
+    np.save(f'{outprefix}_I.npy', I)
+
+
 else:
     print('unrecognized mode:', args.mode)
 
