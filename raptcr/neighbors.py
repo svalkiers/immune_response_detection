@@ -12,7 +12,7 @@ from typing import Union
 
 from .hashing import Cdr3Hasher, TCRDistEncoder
 from .indexing import IvfIndex, FlatIndex
-from .constants.sampling import match_vj_distribution
+from .background import match_vj_distribution
 from .constants.datasets import sample_tcrs
 
 def tcr_dict_to_df(neighbor_counts, cutoff=1, add_counts=False):
@@ -145,15 +145,18 @@ class NeighborEnrichment():
             - Shuffled repertoire method (see code Phil)
         '''
         if self.bg_index is None:
+            print(f'Background index not set up.\nSampling background of size {depth}.')
             bg = match_vj_distribution(n=depth, foreground=self.repertoire)
             if exhaustive:
                 self.bg_index = FlatIndex(hasher=self.hasher)
             else:
-                self.bg_index = IvfIndex(hasher=self.hasher, n_centroids=k, n_probe=int(k/10))
+                k = int(depth/500)
+                n = int(k/10)
+                self.bg_index = IvfIndex(hasher=self.hasher, n_centroids=k, n_probe=n)
             self.bg_index.add(bg)
             del bg
         else:
-            pass
+            print(f'Using background of size {len(self.bg_index.ids)}.')
 
     def _prefilter(self, k):
         '''
@@ -161,7 +164,7 @@ class NeighborEnrichment():
         or equal to the background neighbor count.
         '''
         # Prepare prefilter index
-        prefilter_index = IvfIndex(hasher=self.hasher, n_centroids=k, n_probe=5)
+        prefilter_index = IvfIndex(hasher=self.hasher, n_centroids=k, n_probe=10)
         bg = match_vj_distribution(n=self.rsize, foreground=self.repertoire)
         prefilter_index.add(bg)
         del bg
@@ -186,7 +189,6 @@ class NeighborEnrichment():
         # Hypergeometric testing
         M = len(self.bg_index.ids) + self.rsize
         N = self.rsize
-        print('testing')
         merged['pval'] = merged.apply(
             lambda x: hypergeom.sf(x['foreground_neighbors']-1, M, x['foreground_neighbors'] + x['background_neighbors'], N),
             axis=1
@@ -274,24 +276,25 @@ class NeighborEnrichment():
         '''
         # Neighbor counts in foreground should be determined
         assert self.nbr_counts is not None, 'Please compute foreground neighbors first.'
-
         depth = self.rsize * ratio
-        k = int(depth/1000)
-        self.bg_index = IvfIndex(hasher=self.hasher, n_centroids=k, n_probe=5)
         
         # Prefilter
         if prefilter:
-            filtered = self._prefilter(k=k)
+            print('Prefiltering repertoire.')
+            filtered = self._prefilter(k=int(depth/1000))
+        else:
+            filtered = tcr_dict_to_df(self.nbr_counts, add_counts=True)
         
         # Background
-        print(f'Sampling background of size {depth}.')
         self._setup_background_index(depth=depth, exhaustive=exhaustive)
 
         # Find neighbors in background
+        print(f'Computing neighbor counts in background for {len(filtered)} sequences.')
         nbrs_in_background = index_neighbors(query=filtered, index=self.bg_index, r=self.r)
         nbrs_in_background = tcr_dict_to_df(nbrs_in_background, add_counts=True)
-
-        p_values = self._hypergeometric(background_neighbors=nbrs_in_background)
+        # Hypergeometric testing
+        print('Performing hypergeometric testing.')
+        p_values = self._hypergeometric(fg_nbrs=filtered, bg_nbrs=nbrs_in_background)
         self.significant = p_values[p_values.pval<=fdr]
         return self.significant
 

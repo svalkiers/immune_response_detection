@@ -81,3 +81,14 @@ def motif_from_profile(profile, method, cutoff=.7):
                 consensus += "."
 
     return consensus
+
+def dump_json(neighbor_dict, file):
+    json_string = json(neighbor_dict)
+    f = open(file,"w")
+    f.write(json_string)
+    f.close()
+
+def load_json(self, file):
+    with open(file) as json_file:
+        neighbors = json.load(json_file)
+    return neighbors
