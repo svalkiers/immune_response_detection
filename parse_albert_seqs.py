@@ -1,5 +1,4 @@
-# this is the original tcrdist
-# could replace with tcrdist.all_genes.all_genes, probably
+# apologies: old code, quickly ported...
 import tcrdist
 from tcrdist.all_genes import all_genes # for recognized genes
 from tcrdist.translation import get_translation
