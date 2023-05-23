@@ -182,18 +182,31 @@ class NeighborEnrichment():
         '''
         Compute p-values for based on foreground and background neighbor counts
         using the hypergeometric distribution.
+
+        NOTE:
+        SciPy's hypergeometric sf function uses the boost distribution implementation.
+        Integer values in the boost distribution use the C unsigned integer type, which for most
+        compilers is 32 bits. Any values exceedingn 32 bits will prompt either nan or strange
+        p-values.
         '''
         col_remap = {'neighbors_x':'foreground_neighbors', 'neighbors_y':'background_neighbors'}
         merged = fg_nbrs.merge(bg_nbrs, on=['v_call', 'junction_aa'])
         merged = merged.rename(columns=col_remap)
         # Hypergeometric testing
-        M = len(self.bg_index.ids) + self.rsize
-        N = self.rsize
+        N = self.rsize - 1
+        M = len(self.bg_index.ids) + N
+        if M >= 2**32:
+            import warnings
+            warnings.warn(f"Population size exceeds {2**32-1} (32 bits).\n p-values may be miscalculated.")
         merged['pval'] = merged.apply(
-            lambda x: hypergeom.sf(x['foreground_neighbors']-1, M, x['foreground_neighbors'] + x['background_neighbors'], N),
+            lambda x: hypergeom.sf(
+                x['foreground_neighbors']-1, 
+                M, 
+                x['foreground_neighbors'] + x['background_neighbors'], 
+                N
+                ),
             axis=1
             )
-
         return merged.sort_values(by='pval')
 
     def foreground_neighbors_to_json(self, file):
@@ -259,7 +272,7 @@ class NeighborEnrichment():
             self.bg_index.idx = faiss_index
             self.bg_index.ids = index_ids
 
-    def compute_pvalues(self, prefilter=True, ratio=10, fdr=1, exhaustive=False):
+    def compute_pvalues(self, prefilter=False, q=1, ratio=10, fdr=1, exhaustive=False):
         '''
         Assign p-values to neighbor counts by contrasting against a background distribution.
         Uses a prefilter step (if True) to limit the number of vectors to query on the index.
@@ -292,6 +305,7 @@ class NeighborEnrichment():
         print(f'Computing neighbor counts in background for {len(filtered)} sequences.')
         nbrs_in_background = index_neighbors(query=filtered, index=self.bg_index, r=self.r)
         nbrs_in_background = tcr_dict_to_df(nbrs_in_background, add_counts=True)
+        nbrs_in_background["neighbors"] = nbrs_in_background["neighbors"] * q
         # Hypergeometric testing
         print('Performing hypergeometric testing.')
         p_values = self._hypergeometric(fg_nbrs=filtered, bg_nbrs=nbrs_in_background)
