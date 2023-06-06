@@ -5,6 +5,12 @@ from .base import GAPCHAR
 ROOT = dirname(dirname(dirname(abspath(__file__))))
 DATA = join(ROOT, 'raptcr/constants/data')
 
+IMGT = pd.read_csv(join(DATA,'imgt_reference.tsv'), sep='\t')
+mapping = pd.read_csv(join(DATA, 'adaptive_imgt_mapping.csv'))
+
+adaptive_to_imgt_human = mapping.loc[mapping['species'] == 'human'].set_index('adaptive')['imgt'].fillna('NA').to_dict()
+adaptive_to_imgt_mouse = mapping.loc[mapping['species'] == 'mouse'].set_index('adaptive')['imgt'].fillna('NA').to_dict()
+
 def vgene_to_cdr():
     '''
     Load V gene reference file that contains mapping information to extract 
@@ -69,8 +75,12 @@ def format_chain(chain):
         'tcra':'A',
         'tcralpha':'A',
         'tcr_alpha':'A',
+        'ab':'AB',
+        'alphabeta':'AB',
+        'alpha_beta':'AB',
+        'paired':'AB'
         }
-    assert chain.lower() in mapping, f"Unknown chain: {chain}. Please select A or B."
+    assert chain.lower() in mapping, f"Unknown chain: {chain}. Please select A, B or AB."
     return mapping[chain.lower()]
 
 def setup_gene_cdr_strings(organism:str='human', chain:str='B'):
@@ -84,7 +94,7 @@ def setup_gene_cdr_strings(organism:str='human', chain:str='B'):
     # Get CDR information from gene reference file
     all_genes_df = get_gene_reference()
     all_genes_df = all_genes_df[(all_genes_df.organism==organism)&
-                                (all_genes_df.chain==chain)&
+                                (all_genes_df.chain.isin(list(chain)))&
                                 (all_genes_df.region=='V')]
     assert all_genes_df.id.value_counts().max()==1
     all_genes_df.set_index('id', inplace=True)

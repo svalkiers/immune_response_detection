@@ -9,13 +9,20 @@ import os
 from scipy.stats import hypergeom
 from multiprocessing import Pool, cpu_count
 from typing import Union
+from functools import reduce
 
 from .hashing import Cdr3Hasher, TCRDistEncoder
 from .indexing import IvfIndex, FlatIndex
-from .background import match_vj_distribution
+from .background import match_vj_distribution, SyntheticBackground
 from .constants.datasets import sample_tcrs
 
-def tcr_dict_to_df(neighbor_counts, cutoff=1, add_counts=False):
+def above_threshold(df, row, t):
+    for column in df.columns:
+        if row[column] > t:
+            return column
+    return None
+
+def tcr_dict_to_df(neighbor_counts, cutoff=0, add_counts=False):
     '''
     Silly helper function to convert dictionary of joined V_CDR3
     representations into a DataFrame format.
@@ -66,15 +73,19 @@ def index_neighbors(query, r, index):
         trained and should contain vectors to query against.
     '''
     X = index.hasher.fit_transform(query)
-    lim, D, I = index.idx.range_search(X.astype(np.float32), thresh=r)
+    X = X.astype(np.float32)
+    lim, D, I = index.idx.range_search(X, thresh=r)
     return assign_ids(query=index.hasher.tcrs, lim=lim)
 
 class NeighborEnrichment():
     def __init__(
         self,
         repertoire:Union[pd.DataFrame, list],
-        hasher:Union[Cdr3Hasher, TCRDistEncoder],
-        radius:Union[int,float]=12.5,
+        hasher:Union[Cdr3Hasher, TCRDistEncoder]=None,
+        background=None,
+        exact=True,
+        k=None,
+        n=None
         # custom_background=None, -> add this functionality back in later
         # ncpus:int=1 -> this does not seem to have any influence on the computational performance
         ):
@@ -96,21 +107,34 @@ class NeighborEnrichment():
         '''
         self.repertoire = repertoire
         # self.background = custom_background -> add this functionality back in later
-        self.hasher = hasher
-        self.rsize = len(repertoire)
-        self.r = radius
+        if hasher == None:
+            self.hasher = TCRDistEncoder(aa_dim=8, full_tcr=True).fit()
+        else:
+            self.hasher = hasher
 
+        self.rsize = len(repertoire)
+        # self.r = radius
+        self.background = background
         self.nbr_counts = None
         self.bg_index = None
 
         self.hasher.fit()
+
+        if exact:
+            self.fg_index = FlatIndex(hasher=self.hasher)
+        else:
+            if k is None:
+                k = np.round(self.rsize/1000,0)
+            if n is None:
+                n = np.round(k/50,0)
+            self.fg_index = IvfIndex(hasher=self.hasher, n_centroids=int(k), n_probe=int(n))
 
         # if ncpus == -1: # if set to -1, use all CPUs
         #     self.ncpus = cpu_count()
         # else:
         #     self.ncpus = ncpus
 
-    def compute_neighbors(self, exhaustive:bool=True, k=None, n=None):
+    def fixed_radius_neighbors(self, radius:Union[int,float]=12.5, exhaustive:bool=True, k=None, n=None):
         '''
         Find the number of neighbors within a repertoire of interest.
 
@@ -125,36 +149,65 @@ class NeighborEnrichment():
         n
             Number of cells to probe when using the faiss.IndexIVFFlat.
         '''
-        if exhaustive:
-            self.fg_index = FlatIndex(hasher=self.hasher)
-        else:
-            if k is None:
-                k = np.round(self.rsize/1000,0)
-            if n is None:
-                n = np.round(k/50,0)
-            self.fg_index = IvfIndex(hasher=self.hasher, n_centroids=int(k), n_probe=int(n))
+        # if exhaustive:
+        #     self.fg_index = FlatIndex(hasher=self.hasher)
+        # else:
+        #     if k is None:
+        #         k = np.round(self.rsize/1000,0)
+        #     if n is None:
+        #         n = np.round(k/50,0)
+        #     self.fg_index = IvfIndex(hasher=self.hasher, n_centroids=int(k), n_probe=int(n))
         self.fg_index.add(self.repertoire)
-        self.nbr_counts = index_neighbors(query=self.repertoire, index=self.fg_index, r=self.r)
+        self.r = radius
+        self.nbr_counts = tcr_dict_to_df(
+            index_neighbors(query=self.repertoire, index=self.fg_index, r=self.r),
+            add_counts=True
+        )
 
-    def _setup_background_index(self, depth, exhaustive=True):
+    def flexible_radius_neighbors(self, radii:list, t:int, exhaustive=True):
+        self.fg_index.add(self.repertoire)
+        all_res = []
+        for i in radii:
+            print(f"Compute neighbors at TCRdist > {i}")
+            res = tcr_dict_to_df(index_neighbors(query=self.repertoire, index=self.fg_index, r=i), add_counts=True)
+            res = res.rename(columns={"neighbors":f"nn_{i}"})
+            all_res.append(res)
+            merged = reduce(
+                lambda left,right: pd.merge(left,right,on=['v_call','junction_aa'], how='outer'),
+                all_res
+                )
+        print(f"Compute argmin(d,T) > {t}")
+        neighbors_at_radius = merged[merged.columns[2:]]
+        merged["argmin_d"] = neighbors_at_radius.apply(lambda x: above_threshold(df=neighbors_at_radius,row=x,t=t), axis=1)
+        merged = merged.dropna()
+        merged["neighbors"] = [i[1][i[1].argmin_d] for i in merged.iterrows()]
+        merged["argmin_d"] = merged["argmin_d"].apply(lambda x: float(x.split("_")[1]))
+        self.nbr_counts = merged[["v_call","junction_aa","argmin_d","neighbors"]]
+                
+
+    def _setup_background_index(self, exhaustive=True, ratio=10):
         '''
-        Set up the background index by sampling from a large synthetic
-        (OLGA-generated) repertoire.
 
-        TO BE ADDED:
-            - Shuffled repertoire method (see code Phil)
         '''
         if self.bg_index is None:
-            print(f'Background index not set up.\nSampling background of size {depth}.')
-            bg = match_vj_distribution(n=depth, foreground=self.repertoire)
+            if self.background is None:
+                depth = self.repertoire.shape[0] * ratio
+                print(f'Background index not set up.\nSampling background of size {depth}.')
+                # bg = match_vj_distribution(n=depth, foreground=self.repertoire)
+                seq_gen = SyntheticBackground(repertoire=self.repertoire,factor=ratio)
+                self.background = seq_gen.shuffle_repertoire()
+                print("Background contructed.")
+            else:
+                pass
             if exhaustive:
                 self.bg_index = FlatIndex(hasher=self.hasher)
             else:
+                depth = self.background.shape[0]
                 k = int(depth/500)
                 n = int(k/10)
                 self.bg_index = IvfIndex(hasher=self.hasher, n_centroids=k, n_probe=n)
-            self.bg_index.add(bg)
-            del bg
+            self.bg_index.add(self.background)
+            del self.background
         else:
             print(f'Using background of size {len(self.bg_index.ids)}.')
 
@@ -164,8 +217,10 @@ class NeighborEnrichment():
         or equal to the background neighbor count.
         '''
         # Prepare prefilter index
-        prefilter_index = IvfIndex(hasher=self.hasher, n_centroids=k, n_probe=10)
-        bg = match_vj_distribution(n=self.rsize, foreground=self.repertoire)
+        prefilter_index = FlatIndex(hasher=self.hasher)
+        seq_gen = SyntheticBackground(repertoire=self.repertoire,factor=1)
+        bg = seq_gen.shuffle_repertoire()
+        # bg = match_vj_distribution(n=self.rsize, foreground=self.repertoire)
         prefilter_index.add(bg)
         del bg
         # Compute neighbors
@@ -178,7 +233,7 @@ class NeighborEnrichment():
         filtered = filtered.drop(columns=['neighbors_y']).rename(columns={'neighbors_x':'neighbors'})
         return filtered
 
-    def _hypergeometric(self, fg_nbrs, bg_nbrs):
+    def _hypergeometric(self, data):
         '''
         Compute p-values for based on foreground and background neighbor counts
         using the hypergeometric distribution.
@@ -189,25 +244,22 @@ class NeighborEnrichment():
         compilers is 32 bits. Any values exceedingn 32 bits will prompt either nan or strange
         p-values.
         '''
-        col_remap = {'neighbors_x':'foreground_neighbors', 'neighbors_y':'background_neighbors'}
-        merged = fg_nbrs.merge(bg_nbrs, on=['v_call', 'junction_aa'])
-        merged = merged.rename(columns=col_remap)
         # Hypergeometric testing
         N = self.rsize - 1
         M = len(self.bg_index.ids) + N
         if M >= 2**32:
             import warnings
             warnings.warn(f"Population size exceeds {2**32-1} (32 bits).\n p-values may be miscalculated.")
-        merged['pval'] = merged.apply(
+        data['pval'] = data.apply(
             lambda x: hypergeom.sf(
-                x['foreground_neighbors']-1, 
+                x['neighbors']-1, 
                 M, 
-                x['foreground_neighbors'] + x['background_neighbors'], 
+                x['neighbors'] + x['background_neighbors'], 
                 N
                 ),
             axis=1
             )
-        return merged.sort_values(by='pval')
+        return data.sort_values(by='pval')
 
     def foreground_neighbors_to_json(self, file):
         '''
@@ -296,21 +348,57 @@ class NeighborEnrichment():
             print('Prefiltering repertoire.')
             filtered = self._prefilter(k=int(depth/1000))
         else:
-            filtered = tcr_dict_to_df(self.nbr_counts, add_counts=True)
+            pass
+        filtered = self.nbr_counts[self.nbr_counts.neighbors>0]
         
         # Background
-        self._setup_background_index(depth=depth, exhaustive=exhaustive)
+        print("Setting up background index...")
+        self._setup_background_index(exhaustive=exhaustive)
 
         # Find neighbors in background
         print(f'Computing neighbor counts in background for {len(filtered)} sequences.')
-        nbrs_in_background = index_neighbors(query=filtered, index=self.bg_index, r=self.r)
-        nbrs_in_background = tcr_dict_to_df(nbrs_in_background, add_counts=True)
-        nbrs_in_background["neighbors"] = nbrs_in_background["neighbors"] * q
+        if "argmin_d" in filtered.columns:
+            neighbor_dist = {}
+            for i in filtered.argmin_d.unique():
+                sub = filtered[filtered.argmin_d==i]
+                neighbor_dist[i] = index_neighbors(query=sub, index=self.bg_index, r=i)
+            comb = []
+            for i in neighbor_dist:
+                res_df = tcr_dict_to_df(neighbor_dist[i], add_counts=True)
+                res_df["argmin_d"] = i
+                res_df = res_df.rename(columns={"neighbors":"background_neighbors"})
+                comb.append(res_df)
+            comb = pd.concat(comb)
+            filtered = filtered.merge(comb)
+        else:
+            nbrs_in_background = index_neighbors(query=filtered, index=self.bg_index, r=self.r)
+            nbrs_in_background = tcr_dict_to_df(nbrs_in_background, add_counts=True)
+            nbrs_in_background["neighbors"] = nbrs_in_background["neighbors"] * q
+            nbrs_in_background = nbrs_in_background.rename(columns={"neighbors":"background_neighbors"})
+            filtered = filtered.merge(nbrs_in_background)
         # Hypergeometric testing
         print('Performing hypergeometric testing.')
-        p_values = self._hypergeometric(fg_nbrs=filtered, bg_nbrs=nbrs_in_background)
+        p_values = self._hypergeometric(data=filtered)
         self.significant = p_values[p_values.pval<=fdr]
         return self.significant
+
+    
+#     from functools import reduce
+
+# np.random.seed(42)
+
+
+
+# encoder = TCRDistEncoder().fit()
+# print("Building foreground index--")
+# index = FlatIndex(hasher=encoder)
+# index.add(df_test)
+
+# radii = [12.5,18.5,24.5,30.5,36.5]
+
+
+
+# df_merged
 
 
         # col_remap = {'neighbors_x':'foreground_neighbors', 'neighbors_y':'background_neighbors'}

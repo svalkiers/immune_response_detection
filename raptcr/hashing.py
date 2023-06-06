@@ -184,7 +184,7 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         cdr3_weight:int=3,
         organism:str='human',
         chain:str='B',
-        full_tcr:bool=False
+        full_tcr:bool=True
         ):
         """
         TCRDist-based vector embedding for amino acid sequences. Trims and
