@@ -85,7 +85,6 @@ def analyze_file(
     
     enricher = NeighborEnrichment(
         repertoire=df,
-        radius=radius,
         background=background
         )
     
@@ -95,8 +94,8 @@ def analyze_file(
         ratio = enricher.bg_index.idx.ntotal / df.shape[0]
 
     print("Computing neighbors in foreground...")
-    enricher.compute_neighbors()
-    pvals = enricher.compute_pvalues(ratio=10)
+    enricher.fixed_radius_neighbors(radius=radius)
+    pvals = enricher.compute_pvalues(ratio=ratio)
 
     base = path.basename(filename)
     file_out = base.split('.')[0] + f'_{suffix}.tsv'
