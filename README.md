@@ -19,7 +19,7 @@ To run the code in this repository, use the following instructions:
 3. Create an environment that supports all the dependencies:
 
    ```sh
-   conda env create --file environment.yaml
+   conda env create --file environment.yml
    ```
 
 4. Activate the environment.
