@@ -25,7 +25,7 @@ To run the code in this repository, use the following instructions:
 4. Activate the environment.
 
    ```sh
-   conda activate immune_response_detecion
+   conda activate immune_response_detection
    ```
 
 ## Use
