@@ -63,13 +63,7 @@ optional arguments:
 **Example:**
 
 ```
-python3 ./src/run_pipeline.py \
-    --filename ./data/example_repertoire.tsv \
-    --radius 12.5 \
-    --ratio 10 \
-    --suffix result \
-    --outdir /path_to_folder/output/ \
-    --exclude_singlets False \
+python3 run_pipeline.py --filename ./data/example_repertoire.tsv --radius 12.5 --ratio 10 --suffix result --outdir /path_to_folder/output/
 ```
 
 **Note:**
