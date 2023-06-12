@@ -34,7 +34,7 @@ To run the code in this repository, use the following instructions:
 
 By far the easiest way to run the analysis is through the using of the command line interface, provided through the  `run_pipeline.py` script.
 
-```bash
+```
 usage: run_pipeline.py [-h] [-f FILENAME] [-d DIRECTORY] [-r RADIUS] [-q RATIO] [-s SUFFIX] -o OUTDIR [--custom_background CUSTOM_BACKGROUND] [--custom_index CUSTOM_INDEX]
                        [--downsample DOWNSAMPLE]
 
@@ -58,6 +58,18 @@ optional arguments:
                         The path to a custom background file.
   --downsample DOWNSAMPLE
                         The number of sequences to downsample from the input file. Default is None.
+```
+
+**Example:**
+
+```
+python3 ./src/run_pipeline.py \
+    --filename ./data/example_repertoire.tsv \
+    --radius 12.5 \
+    --ratio 10 \
+    --suffix result \
+    --outdir /path_to_folder/output/ \
+    --exclude_singlets False \
 ```
 
 **Note:**
