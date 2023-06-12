@@ -7,7 +7,6 @@ import random
 import itertools
 
 from collections import Counter
-from .constants.datasets import sample_tcrs
 from .constants.modules.olga import load_model, sequence_generation
 from .constants.modules.olga.sequence_generation import SequenceGenerationVDJ
 from .constants.modules.olga import sequence_generation, load_model, olga_directed

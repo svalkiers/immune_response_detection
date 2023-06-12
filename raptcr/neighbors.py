@@ -13,7 +13,7 @@ from functools import reduce
 
 from .hashing import Cdr3Hasher, TCRDistEncoder
 from .indexing import IvfIndex, FlatIndex
-from .background import match_vj_distribution, SyntheticBackground
+from .background import SyntheticBackground
 
 def above_threshold(df, row, t):
     for column in df.columns:
