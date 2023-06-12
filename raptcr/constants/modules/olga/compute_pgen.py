@@ -261,9 +261,9 @@ import subprocess
 reqs = subprocess.check_output([sys.executable, '-m', 'pip', 'freeze'])
 installed_packages = [r.decode().split('==')[0] for r in reqs.split()]
 if 'olga' not in installed_packages: sys.path.insert(0, os.path.split(os.path.dirname(os.path.abspath(__file__)))[0])
-import olga.load_model as load_model
-import olga.generation_probability as generation_probability
-from olga.utils import nt2aa, determine_seq_type, gene_to_num_str
+import .load_model as load_model
+import .generation_probability as generation_probability
+from .utils import nt2aa, determine_seq_type, gene_to_num_str
 #
 #import load_model
 #import generation_probability

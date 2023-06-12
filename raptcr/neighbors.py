@@ -14,7 +14,6 @@ from functools import reduce
 from .hashing import Cdr3Hasher, TCRDistEncoder
 from .indexing import IvfIndex, FlatIndex
 from .background import match_vj_distribution, SyntheticBackground
-from .constants.datasets import sample_tcrs
 
 def above_threshold(df, row, t):
     for column in df.columns:

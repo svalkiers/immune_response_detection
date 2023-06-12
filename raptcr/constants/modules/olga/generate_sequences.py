@@ -139,8 +139,8 @@ import subprocess
 reqs = subprocess.check_output([sys.executable, '-m', 'pip', 'freeze'])
 installed_packages = [r.decode().split('==')[0] for r in reqs.split()]
 if 'olga' not in installed_packages: sys.path.insert(0, os.path.split(os.path.dirname(os.path.abspath(__file__)))[0])
-import olga.load_model as load_model
-import olga.sequence_generation as sequence_generation
+import .load_model as load_model
+import .sequence_generation as sequence_generation
 #import load_model as load_model
 #import sequence_generation as sequence_generation
 from optparse import OptionParser

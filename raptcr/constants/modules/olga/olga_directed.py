@@ -60,7 +60,7 @@ Example
 """
 from __future__ import division
 import numpy as np
-from olga.utils import nt2aa, calc_steady_state_dist
+from .utils import nt2aa, calc_steady_state_dist
 import warnings
 
 class SequenceGenerationVDJ(object):
