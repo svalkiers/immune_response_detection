@@ -20,8 +20,9 @@ from phil_functions import * # bad, temporary...
 
 import faiss
 import argparse
-import tcrdist
+from raptcr.constants.modules import tcrdist
 import time
+print('tcrdist:', tcrdist)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--mode', required=True)
@@ -42,6 +43,17 @@ parser.add_argument('--filename')
 parser.add_argument('--skip_fg', action='store_true')
 parser.add_argument('--start_index', type=int)
 parser.add_argument('--stop_index', type=int)
+parser.add_argument('--v_column', default='v')
+parser.add_argument('--j_column', default='j')
+parser.add_argument('--cdr3aa_column', default='cdr3aa')
+parser.add_argument('--cdr3nt_column', default='cdr3nt')
+parser.add_argument('--chain', default='B')
+parser.add_argument('--organism', default='human')
+parser.add_argument('--filetag')
+parser.add_argument('--fg_runtag')
+parser.add_argument('--bg_runtag')
+parser.add_argument('--min_fg_bg_nbr_ratio', type=float, default=2.0)
+parser.add_argument('--clobber', action='store_true')
 
 args = parser.parse_args()
 
@@ -418,6 +430,170 @@ elif args.mode == 'vector_knns':
     np.save(f'{outprefix}_D.npy', D)
     np.save(f'{outprefix}_I.npy', I)
 
+
+elif args.mode == 'make_bg': # make and save background file
+    assert args.outfile
+
+    tcrs = pd.read_table(args.filename)
+    # tcrs.rename(columns={
+    #     args.v_column:'v',
+    #     args.j_column:'j',
+    #     args.cdr3aa_column:'cdr3aa',
+    #     args.cdr3nt_column:'cdr3nt',
+    #     }, inplace=True)
+
+    #v_column, j_column, cdr3_column = 'v','j','cdr3aa'
+    tcrs = filter_out_bad_genes_and_cdr3s(
+        tcrs, args.v_column, args.cdr3aa_column, args.organism, args.chain,
+        j_column=args.j_column)
+    tcrs[args.cdr3nt_column] = tcrs[args.cdr3nt_column].str.lower()
+
+    junctions = parse_junctions_for_background_resampling(
+        tcrs, args.organism, args.chain, args.v_column, args.j_column,
+        args.cdr3aa_column, args.cdr3nt_column)
+
+    bg_tcr_tuples = resample_background_tcrs_v4(args.organism, args.chain, junctions)
+    bg_tcrs = pd.DataFrame([{args.v_column:x[0], args.j_column:x[1],
+                             args.cdr3aa_column:x[2], args.cdr3nt_column:x[3]}
+                            for x in bg_tcr_tuples])
+
+    bg_tcrs.to_csv(args.outfile, sep='\t', index=False)
+    print('made:', args.outfile)
+
+elif args.mode == 'nbr_counts': # count nbrs
+    assert args.outfile
+
+    start0 = timer()
+    fg_tcrs = pd.read_table(args.fg_filename)
+
+    fg_tcrs = filter_out_bad_genes_and_cdr3s(
+        fg_tcrs, args.v_column, args.cdr3aa_column, args.organism, args.chain,
+        j_column=args.j_column)
+
+    fg_vecs = gapped_encode_tcr_chains(
+        fg_tcrs, args.organism, args.chain, args.aa_mds_dim, v_column=args.v_column,
+        cdr3_column=args.cdr3aa_column).astype(np.float32)
+
+    print('num_fg_tcrs:', fg_vecs.shape[0], args.fg_filename)
+
+    nbr_counts = np.zeros((fg_vecs.shape[0],))#, dtype=int)
+
+    for bg_filename in args.bg_filenames:
+        bg_tcrs = pd.read_table(bg_filename)
+
+        bg_tcrs = filter_out_bad_genes_and_cdr3s(
+            bg_tcrs, args.v_column, args.cdr3aa_column, args.organism, args.chain,
+            j_column=args.j_column)
+
+        bg_vecs = gapped_encode_tcr_chains(
+            bg_tcrs, args.organism, args.chain, args.aa_mds_dim, v_column=args.v_column,
+            cdr3_column=args.cdr3aa_column).astype(np.float32)
+
+        print('num_bg_tcrs:', bg_vecs.shape[0], bg_filename)
+
+        idx = faiss.IndexFlatL2(bg_vecs.shape[1])
+        idx.add(bg_vecs)
+        print('range_searching:', fg_vecs.shape[0], bg_vecs.shape[0])
+        start = timer()
+        lims,D,I = idx.range_search(fg_vecs, args.radius)
+        print(f'range_search took {timer()-start:.2f} secs total_time: '
+              f'{timer()-start0:.2f}, {fg_vecs.shape[0]} x {bg_vecs.shape[0]}')
+        nbr_counts += (lims[1:] - lims[:-1])
+
+    np.save(args.outfile, nbr_counts)
+    print('made:', args.outfile)
+
+elif args.mode == 't1d_step2':
+    # accumulate the foreground and background nbr-counts
+    # calculate hypergeometric pvals
+    # e.g. filetag = 'cohort_1_Brusko_9964_TCRB_imgt'
+    slurmdir = '/home/pbradley/csdat/raptcr/slurm/'
+    fg_counts_file = f'{slurmdir}{args.fg_runtag}/{args.filetag}_nbr_totals.npy'
+    bg_counts_file = f'{slurmdir}{args.bg_runtag}/{args.filetag}_nbr_totals.npy'
+    pvals_outfile = f'{slurmdir}{args.fg_runtag}/{args.filetag}_pvals.tsv'
+
+    if exists(pvals_outfile) and not args.clobber:
+        print(f'{pvals_outfile} already exists and no --clobber, stopping')
+        print('DONE')
+        exit()
+
+    cohort = int(args.filetag.split('_')[1])
+    EXPECTED_NUM_FILES = {1:1425}[cohort] # add other cohorts here!
+    BATCH_SIZE = 20
+
+    bdir = '/fh/fast/bradley_p/t1d/'
+
+    all_totals = {}
+    for line in open(f'{bdir}wc_cohort_{cohort}_tsvs.txt','r'):
+        l = line.split()
+        if l[1] == 'total':
+            continue
+        ftag = f'cohort_{cohort}_'+l[1].split('/')[1][:-4]
+        all_totals[ftag] = int(l[0])-1 # drop header line
+    num_files = len(all_totals)
+    assert num_files == EXPECTED_NUM_FILES
+    num_batches = (num_files-1)//BATCH_SIZE + 1
+    total_bg_tcrs = sum(all_totals.values())
+
+    # accumulate the counts:
+    for runtag, counts_file in [[args.fg_runtag, fg_counts_file],
+                                [args.bg_runtag, bg_counts_file]]:
+        if not exists(counts_file): # make the counts file
+            print(f'need to create {counts_file} from {num_batches} countsfiles')
+            mydir = f'{slurmdir}{runtag}/{args.filetag}/'
+            nbr_counts = None
+            missed = []
+            for b in range(num_batches):
+                start, stop = b*BATCH_SIZE, (b+1)*BATCH_SIZE
+                nbrsfile = f'{mydir}{args.filetag}_{b}_{start}_{stop}.npy'
+                if not exists(nbrsfile):
+                    missed.append(nbrsfile)
+                    print('ERROR: missing', nbrsfile)
+                    continue
+                #assert exists(nbrsfile)
+                counts = np.load(nbrsfile)
+                if b==0:
+                    nbr_counts = counts
+                else:
+                    nbr_counts += counts
+            if missed:
+                print(f'ERROR missing {len(missed)} counts files so cant make',
+                      counts_file)
+                print('missed', ' '.join(missed))
+                sys.stderr.write('ERROR missing some counts files for {counts_file}\n')
+                exit() # NOTE EARLY EXIT WITHOUT "DONE"
+
+            np.save(counts_file, nbr_counts)
+            print('made:', counts_file)
+
+    # now compute the p-values
+    ftag = '_'.join(args.filetag.split('_')[2:]) # remove the 'cohort_1_' part
+    repfile = f'{bdir}cohort_{cohort}/{ftag}.tsv'
+    assert exists(repfile)
+
+    tcrs = pd.read_table(repfile)
+    num_tcrs = tcrs.shape[0]
+
+    assert num_tcrs == all_totals[args.filetag]
+
+    fg_nbr_counts = np.load(fg_counts_file)
+    bg_nbr_counts = np.load(bg_counts_file)
+
+    assert fg_nbr_counts.shape == bg_nbr_counts.shape == (num_tcrs,) # could fail??
+
+    assert np.sum(fg_nbr_counts<0.5)==0 # no zeros
+    fg_nbr_counts -= 1. # self nbrs
+
+    pvals = compute_nbr_count_pvalues(
+        fg_nbr_counts, bg_nbr_counts, total_bg_tcrs,
+        num_fg_tcrs = total_bg_tcrs,
+        min_fg_bg_nbr_ratio = args.min_fg_bg_nbr_ratio,
+    )
+
+    pvals = pvals.join(tcrs, on='tcr_index')
+
+    pvals.to_csv(pvals_outfile, sep='\t', index=False)
+    print('made:', pvals_outfile)
 
 else:
     print('unrecognized mode:', args.mode)

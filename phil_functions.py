@@ -5,6 +5,7 @@
 import raptcr
 from raptcr.constants.hashing import BLOSUM_62
 from raptcr.constants.base import AALPHABET
+#from raptcr.constants.modules import tcrdist
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -295,17 +296,20 @@ def compute_nbr_count_pvalues(
         max_fg_bg_nbr_ratio=100.0, # used if bg_nbrs==0 (doesnt affect pval calc)
         min_pvalue = 1e-300,
         target_bg_nbrs=None, # for the 'rescaled' pvalue
+        num_fg_tcrs=None,
 ):
     ''' Compute hypergeometric pvalues from foreground and background neighbor counts
     '''
     from scipy.stats import hypergeom
-    num_fg_tcrs = fg_counts.shape[0]
-    assert bg_counts.shape == (num_fg_tcrs,)
+    assert bg_counts.shape == fg_counts.shape
+    if num_fg_tcrs is None:
+        num_fg_tcrs = fg_counts.shape[0]
+        assert bg_counts.shape == (num_fg_tcrs,)
 
     dfl = []
     for ind, (fg_nbrs, bg_nbrs) in enumerate(zip(fg_counts, bg_counts)):
-        if ind%50000==0:
-            print('compute_nbr_count_pvalues:', ind, num_fg_tcrs)
+        if ind%5000==0:
+            print('compute_nbr_count_pvalues:', ind, fg_counts.shape, num_fg_tcrs)
         expected_nbrs = bg_nbrs * num_fg_tcrs / num_bg_tcrs
         if bg_nbrs==0:
             if fg_nbrs==0:
@@ -383,7 +387,7 @@ def parse_junctions_for_background_resampling(
 
     returns a dataframe with info
     '''
-    from tcrdist.tcr_sampler import parse_tcr_junctions
+    from raptcr.constants.modules.tcrdist.tcr_sampler import parse_tcr_junctions
 
     # tcrdist parsing function expects paired tcrs as list of tuples of tuples
     cols = [v_column, j_column, cdr3aa_column, cdr3nt_column]
@@ -415,7 +419,7 @@ def resample_background_tcrs_v4(
     returns a list of tuples [(v,j,cdr3aa,cdr3nt), ...] of length = junctions.shape[0]
 
     '''
-    from tcrdist.tcr_sampler import resample_shuffled_tcr_chains
+    from raptcr.constants.modules.tcrdist.tcr_sampler import resample_shuffled_tcr_chains
 
     assert chain in ['A','B']
 
