@@ -28,8 +28,7 @@ def index_neighbors_manual(query, r, index):
 
 def range_search_to_csr_matrix(lims,
     D, 
-    I,
-    exclude_self_as_neighbor = False):
+    I):
     """
     Convert output of faiss index.idx.range_search to a csr sparse matrix
 
@@ -42,10 +41,6 @@ def range_search_to_csr_matrix(lims,
         neigbor distanace vector output of index.idx.range_search       
     I 
         neigbor index vector output of index.idx.range_search
-    exclude_self_as_neighbor 
-        boolean (default = False), if True self connections will be excluded. 
-        to matchm tcrdist3 default includes self connections. Note these and
-        other zero distances will be encoded as -1 in the sparse csr_matrix
     Returns
     -------
     csr_mat 
@@ -62,10 +57,7 @@ def range_search_to_csr_matrix(lims,
         dx_as_int = [round(x) for x in dx]
         # convert 0 dist to negative 1 for sparsity
         dx_as_int = [-1 if x == 0 else x for x in dx_as_int]
-        if exclude_self_as_neighbor:
-            dist_csr.append([(i,j,d) for j, d in zip(ix, dx_as_int) if i!=j])
-        else:
-            dist_csr.append([(i,j,d) for j, d in zip(ix, dx_as_int)])
+        dist_csr.append([(i,j,d) for j, d in zip(ix, dx_as_int)])
     # flatten list of tuple lists
     dist_csr = np.concatenate(dist_csr)
     row_indices = [row for row, col, val in dist_csr]

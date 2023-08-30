@@ -91,6 +91,37 @@ The code block below shows the most basic example where we run the analysis for 
  result = enricher.compute_pvalues()
  ```
 
+#### Getting a sparse distance matrix after vetorized  
+
+The code block blow shows a basic example for those wanting 
+to implement a vectorized approximation of TCRdist, 
+where we find neighbors (TCRdist < r). Here 
+the distances can be converted to a sparse matrix
+and saved.
+
+```python
+import pandas as pd
+from scipy.sparse import csr_matrix, save_npz
+from raptcr.neighbors import NeighborEnrichment
+from raptcr.export import index_neighbors_manual
+from raptcr.export import range_search_to_csr_matrix
+foreground = pd.read_table('raptcr/datasets/1K_sequences.tsv')
+# add an allele for proper lookup of CDR1,CDR2,CDR2.5
+foreground['v_call'] = foreground['v_call'].apply(lambda x : f"{x}*01")
+foreground['j_call'] = foreground['j_call'].apply(lambda x : f"{x}*01")
+enricher = NeighborEnrichment(repertoire=foreground)
+enricher.fixed_radius_neighbors(radius=36.5) 
+lims, D, I  = index_neighbors_manual(query= enricher.repertoire, 
+                                     index=enricher.fg_index, 
+                                     r= enricher.r)
+csr_mat = range_search_to_csr_matrix(lims = lims, 
+                                     D = D, 
+                                     I = I)
+#<1000x1000 sparse matrix of type '<class 'numpy.int64'>'
+#        with 1036 stored elements in Compressed Sparse Row format>
+save_npz("sparse_matrix_filename.npz", csr_mat)
+```
+
 #### Using a custom background
 
 ```python
