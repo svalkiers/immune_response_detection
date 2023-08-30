@@ -91,7 +91,7 @@ The code block below shows the most basic example where we run the analysis for 
  result = enricher.compute_pvalues()
  ```
 
-#### Getting a sparse distance matrix after vetorized  
+#### Export a sparse matrix after computing vectorized TCRdist  
 
 The code block blow shows a basic example for those wanting 
 to implement a vectorized approximation of TCRdist, 
