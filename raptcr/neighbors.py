@@ -76,6 +76,115 @@ def index_neighbors(query, r, index):
     lim, D, I = index.idx.range_search(X, thresh=r)
     return assign_ids(query=index.hasher.tcrs, lim=lim)
 
+def neighbor_retrieval(query, encoder=None, background=None, d=24.5, drop_zero_neighbor=False):
+    """
+    Retrieve neighboring T-cell receptor (TCR) sequences from a background set based on a similarity threshold.
+
+    This function takes a query set of TCR sequences and a background set (or uses the query set itself if none provided),
+    and retrieves neighboring TCR sequences from the background set based on their similarity to the query set,
+    using a specified encoding method.
+
+    Parameters:
+        query (pandas.DataFrame): A DataFrame containing TCR sequences to be used as the query set.
+        encoder (Optional[TCRDistEncoder]): An instance of TCRDistEncoder for encoding TCR sequences.
+            If not provided, a default TCRDistEncoder will be used.
+        background (Optional[pandas.DataFrame]): A DataFrame containing TCR sequences to be used as the background set.
+            If not provided, the query set will be used as the background set.
+        d (float): The similarity threshold. TCR sequences with a similarity score below this threshold will be excluded.
+        drop_zero_neighbor (bool): If True, TCRs with no neighbors within the specified threshold will be excluded from the result.
+
+    Returns:
+        dict: A dictionary containing information about the neighboring TCR sequences for each query TCR.
+            The keys of the dictionary are tuples representing the (v_call, junction_aa) of the query TCRs.
+            The values are tuples containing:
+                - The number of neighbors found within the threshold (nneigh).
+                - List of indices of neighboring TCRs in the background set (idx_ids).
+                - List of similarity distances between query TCRs and their neighbors (idx_dist).
+                - List of neighboring TCR sequences (idx_tcr).
+
+    Note:
+        - TCRDistEncoder is used to encode TCR sequences into numerical vectors for similarity comparison.
+        - The function performs range search on the encoded TCR sequences to find neighbors.
+        - If drop_zero_neighbor is True, TCRs with no neighbors within the threshold are excluded from the result.
+
+    Example:
+        query_df = pd.DataFrame({'v_call': ['TRBV6-1*01', 'TRBV7-2*01'], 'junction_aa': ['CASSSPSGAGALHF', 'CASSSRDLPTEAFF']})
+        background_df = pd.DataFrame({'v_call': ['TRBV3-1*01', 'TRBV3-1*01'], 'junction_aa': ['CASSQPEPTSFERANTGELFF', 'CASSQPRISTSGGNSTDTQYF']})
+        neighbor_dict = neighbor_retrieval(query_df, background_df, d=24.5)
+    """
+    # If none provided, search query TCRs against itself
+    if background is None:
+        background = query
+    # If none provided, use default TCRDistEncoder
+    if encoder == None:
+        encoder = TCRDistEncoder(full_tcr=True, aa_dim=16).fit()
+    # Encode query TCRs and create index
+    query_vecs = encoder.transform(query)
+    flat_index = FlatIndex(hasher=encoder)
+    flat_index.add(background)
+    # Perform search on the index
+    lims, D, I = flat_index.idx.range_search(query_vecs.astype(np.float32), thresh=d)
+    # Build the neighbor dictionary
+    neighbor_dict = {}
+    for n, i in enumerate(query.iterrows()):
+        nneigh = lims[n+1]-lims[n]
+        idx_ids = list(I[lims[n]:lims[n+1]])
+        idx_dist = list(D[lims[n]:lims[n+1]])
+        idx_tcr = [flat_index.ids[j] for j in idx_ids]
+        neighbor_dict[(i[1].v_call, i[1].junction_aa)] = (nneigh, idx_ids, idx_dist, idx_tcr)
+    # Drop out TCRs with no neighbors <= d if True
+    if drop_zero_neighbor:
+        neighbor_dict = {i:neighbor_dict[i] for i in neighbor_dict if neighbor_dict[i][0] > 0}
+
+    return neighbor_dict
+
+def neighbor_dict_to_df(neighbor_dict):
+    """
+    Convert a neighbor dictionary to a pandas DataFrame representing an adjacency list.
+
+    This function takes a neighbor dictionary, which contains information about neighboring TCR sequences for each query TCR,
+    and converts it into a pandas DataFrame that represents an adjacency list suitable for network analysis.
+
+    Parameters:
+        neighbor_dict (dict): A dictionary containing information about neighboring TCR sequences.
+            The keys are tuples representing the (v_call, junction_aa) of query TCRs.
+            The values are tuples containing:
+                - The number of neighbors found (nneigh).
+                - List of indices of neighboring TCRs (idx_ids).
+                - List of similarity distances between query TCRs and their neighbors (idx_dist).
+                - List of neighboring TCR sequences (idx_tcr).
+
+    Returns:
+        pandas.DataFrame: A DataFrame representing an adjacency list with columns:
+            - 'idx': Index of the neighboring TCR.
+            - 'tcrdist': Similarity distance between the query TCR and the neighbor.
+            - 'target': TCR sequence of the neighbor.
+            - 'source': TCR sequence of the query TCR (formatted as 'v_call_junction_aa').
+            - 'target_v_call': V gene of the neighbor.
+            - 'target_junction_aa': CDR3 of the neighbor.
+            - 'source_v_call': V gene of the query TCR.
+            - 'source_junction_aa': CDR3 of the query TCR.
+
+    Example:
+        neighbor_dict = {('V1', 'ACDE'): (2, [0, 1], [0.1, 0.2], ['V2_ACDF', 'V3_EFGH'])}
+        adjacency_df = neighbor_dict_to_df(neighbor_dict)
+    """
+    adj_list = []
+    # For every TCR in the neighbor dictionary, create an adjacency matrix
+    for i in neighbor_dict:
+        n = neighbor_dict[i][0] # number of neighbors
+        df = pd.DataFrame([tuple(j[x] for j in neighbor_dict[i][1:]) for x in range(n)])
+        df.columns = ["idx", "tcrdist", "target"]
+        df["source"] = "_".join(i) # source TCR
+        adj_list.append(df)
+    # Concatenate all adjacency lists into one
+    adj_list = pd.concat(adj_list)
+    # Annotate V gene and CDR3
+    adj_list[["target_v_call", "target_junction_aa"]] = adj_list["target"].str.split("_", expand=True)
+    adj_list[["source_v_call", "source_junction_aa"]] = adj_list["source"].str.split("_", expand=True)
+    
+    return adj_list
+
 class NeighborEnrichment():
     def __init__(
         self,
@@ -381,7 +490,53 @@ class NeighborEnrichment():
         self.significant = p_values[p_values.pval<=fdr]
         return self.significant
 
-    
+def to_dict(query, index):
+    ndict = {}
+    for i in range(len(query)):
+        name = query.iloc[i].name
+        q = pd.DataFrame(query.iloc[i]).T
+        neighbors = index.radius_search(query=q, r=12.5)
+        v = q.v_call.values[0]
+        cdr3 = q.junction_aa.values[0]
+        ndict[name] = tuple((v, cdr3, [i[0].split("_") + [i[1]] for i in neighbors]))
+    return ndict
+
+def shared(neighbors_a, neighbors_b):
+    ovl = []
+    # a vs b
+    for i in neighbors_a:
+        vcall = neighbors_a[i][0]
+        junction_aa = neighbors_a[i][1]
+        for j in neighbors_b:
+            for k in neighbors_b[j][2]:
+                if vcall == k[0]:
+                    if junction_aa == k[1]:
+                        ovl.append((i,j))
+    # b vs a (reverse)
+    for i in neighbors_b:
+        vcall = neighbors_b[i][0]
+        junction_aa = neighbors_b[i][1]
+        for j in neighbors_a:
+            for k in neighbors_a[j][2]:
+                if vcall == k[0]:
+                    if junction_aa == k[1]:
+                        ovl.append((i,j))
+    return list({tuple(sorted(item)) for item in ovl})
+
+def to_neighborhood(neigh):
+    return [neigh[0] + "_" + neigh[1]] + [i[0] + "_" + i[1] for i in neigh[2]]
+
+def overlapping(neighbors_a, neighbors_b):
+    result = []
+    for i in neighbors_a:
+        neighborhood_a = to_neighborhood(neighbors_a[i])
+        for j in neighbors_b:
+            neighborhood_b = to_neighborhood(neighbors_b[j])
+            ovl = set(neighborhood_a).intersection(set(neighborhood_b))
+            if len(ovl) > 0:
+                result.append(tuple([(i,j),ovl]))
+    return result
+
 #     from functools import reduce
 
 # np.random.seed(42)

@@ -167,6 +167,27 @@ class BaseIndex(ABC):
             return result[result.distance > 0]
         return result
 
+
+    def dump_as_json(self, name):
+        '''
+        Write the contents of an index to disk. This function
+        will create a new folder containing one binary file
+        that stores the faiss index, and one file that stores
+        the TCR sequence ids.
+
+        Parameters
+        ----------
+        name: str
+            Name of the folder to dump the files.
+        '''
+        # assert self.bg_index is not None, "No background index found."
+        # os.mkdir(name)
+        json_string = json.dumps(self.idx.ids)
+        faiss.write_index(self.bg_index.idx, os.path.join(name,'index.bin'))
+        f = open(os.path.join(name,f'{name}.json'),"w")
+        f.write(json_string)
+        f.close()
+
 class FlatIndex(BaseIndex):
     """
     Exact search for euclidean hash disstrtance.
