@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import itertools
+from concurrent.futures import ThreadPoolExecutor   
 from os.path import dirname, abspath, join
 from collections import Counter
 from .constants.modules.tcrdist.tcr_sampler import parse_tcr_junctions, resample_shuffled_tcr_chains
@@ -306,9 +307,19 @@ class Background():
         else:
             return good_tcrs
 
+    def process_background(self) -> pd.DataFrame:
+        return pd.DataFrame(self.resample_background_tcrs())
 
-    def shuffled_background(self):
-        bg = pd.concat([pd.DataFrame(self.resample_background_tcrs()) for i in range(self.factor)])
+    def shuffled_background(self, num_workers=1):
+        # If num_workers > 1, use multiprocessing
+        if num_workers > 1:
+            import multiprocessing as mp 
+            with mp.Pool(processes=num_workers) as pool:
+                backgrounds = pool.starmap(self.process_background, [() for _ in range(self.factor)])
+        else:
+            backgrounds = [self.process_background() for i in range(self.factor)]
+        # Combine reshuffled repertoires
+        bg = pd.concat(backgrounds)
         bg.columns = [self.v_column, self.j_column, self.cdr3aa_column, self.cdr3nt_column]
         return bg
 
