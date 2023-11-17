@@ -311,6 +311,12 @@ class Background():
         return pd.DataFrame(self.resample_background_tcrs())
 
     def shuffled_background(self, num_workers=1):
+        '''
+        Creates a background repertoire by reshuffling the input repertoire
+        n times (n = factor).
+
+        num_workers: number of CPUs allocated
+        '''
         # If num_workers > 1, use multiprocessing
         if num_workers > 1:
             import multiprocessing as mp 
@@ -322,6 +328,19 @@ class Background():
         bg = pd.concat(backgrounds)
         bg.columns = [self.v_column, self.j_column, self.cdr3aa_column, self.cdr3nt_column]
         return bg
+
+    def batch_shuffling(self, destination):
+        '''
+        Performs background shuffling in batches and iteratively stores
+        output on disk.
+        '''
+        for i in range(self.factor):
+            background = self.process_background()
+            if i == 0:
+                background.columns = [self.v_column, self.j_column, self.cdr3aa_column, self.cdr3nt_column]
+                background.to_csv(destination, sep="\t", index=False)
+            else:
+                background.to_csv(destination, sep="\t", mode="a", index=False, header=False)
 
     # TO BE IMPLEMENTED:
     # random background generation using OLGA 
