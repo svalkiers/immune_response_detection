@@ -70,18 +70,6 @@ def capture_nucseq(tcr, organism='human'):
     else:
         return cdr3_nucseq
 
-# def v_fam_to_gene():
-#     mapping = {}
-#     for i in IMGT.iterrows():
-#         vfam = i[1].imgt_subgroup
-#         if vfam not in mapping:
-#         mapping[vfam] = None 
-#         if mapping[vfam] == None:
-#             if i[1].fct == "F":
-#                 vgen = i[1].imgt_gene_name
-#                 mapping[vfam] = vgen
-#     return mapping
-
 def get_tcr(row):
     return (row.v_call, row.junction_aa, row.junction, row.j_call)
 
@@ -248,15 +236,6 @@ def parse_britanova_repertoires(file):
     # Remove ambiguous CDR3 sequences
     df = df[df['junction_aa'].apply(lambda x: _is_cdr3(x))]
 
-    # if 'clone_count' in df.columns:
-    #     clone_id = ['junction_aa', 'v_call', 'j_call']
-    #     conv = df.groupby(clone_id).size().reset_index()
-    #     conv.columns = clone_id + ['convergence']
-    #     df = df.groupby(clone_id).agg({'clone_count': ['sum']}).reset_index()
-    #     df.columns = clone_id + ['duplicate_count']
-    #     df = df.merge(conv)
-
-    # return df.sort_values(by='convergence', ascending=False).reset_index(drop=True)
     return df.reset_index(drop=True)
 
 def parse_yfv_repertoires(file, output='regular'):
@@ -317,13 +296,6 @@ def parse_yfv_repertoires(file, output='regular'):
         df = df[list(cols.values())]
         df['cdr3nt'] = df.cdr3nt.str.lower()
         return df.reset_index(drop=True)
-    # if 'clone_count' in df.columns:
-    #     clone_id = ['junction_aa', 'v_call', 'j_call']
-    #     conv = df.groupby(clone_id).size().reset_index()
-    #     conv.columns = clone_id + ['convergence']
-    #     df = df.groupby(clone_id).agg({'clone_count': ['sum']}).reset_index()
-    #     df.columns = clone_id + ['duplicate_count']
-    #     df = df.merge(conv)
 
 def read_sne_file(path, correct_pvals=True, filter_significant=True):
     name = os.path.basename(path).split('_')[0]
