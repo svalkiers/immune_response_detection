@@ -13,7 +13,7 @@ from functools import reduce
 
 from .encoding import TCRDistEncoder
 from .indexing import IvfIndex, FlatIndex
-from .background import SyntheticBackground
+from .background import Background
 from .constants.parsing import check_formatting
 
 def above_threshold(df, row, t):
@@ -214,7 +214,7 @@ class NeighborEnrichment():
     def __init__(
         self,
         repertoire:Union[pd.DataFrame, list],
-        encoder:Union[TCRDistEncoder]=None,
+        encoder:TCRDistEncoder=None,
         background=None,
         exact=True,
         k=None,
@@ -265,10 +265,6 @@ class NeighborEnrichment():
                 n = np.round(k/30,0)
             self.fg_index = IvfIndex(encoder=self.encoder, n_centroids=int(k), n_probe=int(n))
 
-        # if ncpus == -1: # if set to -1, use all CPUs
-        #     self.ncpus = cpu_count()
-        # else:
-        #     self.ncpus = ncpus
 
     def fixed_radius_neighbors(self, radius:Union[int,float]=12.5, k=None, n=None):
         '''
@@ -320,8 +316,8 @@ class NeighborEnrichment():
                 depth = self.repertoire.shape[0] * ratio
                 print(f'Background index not set up.\nSampling background of size {depth}.')
                 # bg = match_vj_distribution(n=depth, foreground=self.repertoire)
-                seq_gen = SyntheticBackground(repertoire=self.repertoire,factor=ratio)
-                self.background = seq_gen.shuffle_repertoire()
+                seq_gen = Background(repertoire=self.repertoire,factor=ratio)
+                self.background = seq_gen.shuffled_background()
                 print("Background contructed.")
             else:
                 pass
@@ -344,13 +340,13 @@ class NeighborEnrichment():
         '''
         # Prepare prefilter index
         prefilter_index = FlatIndex(encoder=self.encoder)
-        seq_gen = SyntheticBackground(repertoire=self.repertoire,factor=1)
-        bg = seq_gen.shuffle_repertoire()
+        seq_gen = Background(repertoire=self.repertoire,factor=1)
+        bg = seq_gen.shuffled_background()
         # bg = match_vj_distribution(n=self.rsize, foreground=self.repertoire)
         prefilter_index.add(bg)
         del bg
         # Compute neighbors
-        seq_with_nbrs = tcr_dict_to_df(self.nbr_counts, add_counts=True)
+        seq_with_nbrs = self.nbr_counts[self.nbr_counts.neighbors>0]
         nbrs_in_background = index_neighbors(query=seq_with_nbrs, index=prefilter_index, r=self.r)
         nbrs_in_background = tcr_dict_to_df(nbrs_in_background, add_counts=True)
         # Prep results

@@ -196,17 +196,17 @@ class FlatIndex(BaseIndex):
     Exact search for euclidean hash disstrtance.
     """
 
-    def __init__(self, hasher: TCRDistEncoder) -> None:
+    def __init__(self, encoder: TCRDistEncoder) -> None:
         """
         Initialize index.
 
         Parameters
         ----------
-        hasher : TCRDistEncoder
+        encoder : TCRDistEncoder
             Fitted TCRDistEncoder class.
         """
-        idx = faiss.IndexFlatL2(hasher.m)
-        super().__init__(idx, hasher)
+        idx = faiss.IndexFlatL2(encoder.m)
+        super().__init__(idx, encoder)
 
 
 class PynndescentIndex(BaseIndex):
@@ -216,7 +216,7 @@ class PynndescentIndex(BaseIndex):
 
     def __init__(
         self,
-        hasher: TCRDistEncoder,
+        encoder: TCRDistEncoder,
         k: int = 100,
         diversify_prob: float = 1.0,
         pruning_degree_multiplier: float = 1.5,
@@ -231,7 +231,7 @@ class PynndescentIndex(BaseIndex):
             pruning_degree_multiplier=pruning_degree_multiplier,
         )
         idx.is_trained = True
-        super().__init__(idx, hasher)
+        super().__init__(idx, encoder)
 
 
     def _add_hashes(self, X):
@@ -279,35 +279,35 @@ class BaseApproximateIndex(BaseIndex):
 
 class IvfIndex(BaseApproximateIndex):
     def __init__(
-        self, hasher: TCRDistEncoder, n_centroids: int = 32, n_probe: int = 5
+        self, encoder: TCRDistEncoder, n_centroids: int = 32, n_probe: int = 5
     ) -> None:
         """
         Inverted file index for approximate nearest neighbour search.
 
         Parameters
         ----------
-        hasher : TCRDistEncoder
-            Fitted hasher object to transform CDR3 to vectors.
+        encoder : TCRDistEncoder
+            Fitted encoder object to transform CDR3 to vectors.
         n_centroids : int, default=32
             Number of centroids for the initial k-means clustering.
         n_probe : int, default=5
             Number of centroids to search at query time. Higher n_probe means
             higher recall, but slower speed.
         """
-        idx = faiss.index_factory(hasher.m, f"IVF{n_centroids},Flat")
-        super().__init__(idx, hasher)
+        idx = faiss.index_factory(encoder.m, f"IVF{n_centroids},Flat")
+        super().__init__(idx, encoder)
         self.n_probe = n_probe
 
 
 class HnswIndex:
-    def __init__(self, hasher: TCRDistEncoder, n_links: int = 32) -> None:
+    def __init__(self, encoder: TCRDistEncoder, n_links: int = 32) -> None:
         """
         Index based on Hierarchical Navigable Small World networks.
 
         Parameters
         ----------
-        hasher : TCRDistEncoder
-            Fitted hasher object to transform CDR3 to vectors.
+        encoder : TCRDistEncoder
+            Fitted encoder object to transform CDR3 to vectors.
         n_links : int, default=32
             Number of bi-directional links created for each element during index
             construction. Increasing M leads to better recall but higher memory
@@ -315,13 +315,13 @@ class HnswIndex:
 
         """
         idx = faiss.index_factory(64, f"HNSW{n_links},Flat")
-        super().__init__(idx, hasher)
+        super().__init__(idx, encoder)
 
 
 class FastApproximateIndex(BaseApproximateIndex):
     def __init__(
         self,
-        hasher: TCRDistEncoder,
+        encoder: TCRDistEncoder,
         n_centroids: int = 256,
         n_links: int = 32,
         n_probe: int = 10,
@@ -332,8 +332,8 @@ class FastApproximateIndex(BaseApproximateIndex):
 
         Parameters
         ----------
-        hasher : TCRDistEncoder
-            Fitted hasher object to transform CDR3 to vectors.
+        encoder : TCRDistEncoder
+            Fitted encoder object to transform CDR3 to vectors.
         n_centroids : int, default=32
             Number of centroids for the initial k-means clustering.
         n_probe : int, default=5
@@ -345,7 +345,7 @@ class FastApproximateIndex(BaseApproximateIndex):
             size and slightly slower searching.
         """
         idx = faiss.index_factory(64, f"IVF{n_centroids}_HNSW{n_links},SQ6")
-        super().__init__(idx, hasher)
+        super().__init__(idx, encoder)
         self.n_probe = n_probe
 
 
