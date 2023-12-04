@@ -28,7 +28,8 @@ def index_neighbors_manual(query, r, index):
 
 def range_search_to_csr_matrix(lims,
     D, 
-    I):
+    I,
+    shape = None):
     """
     Convert output of faiss index.idx.range_search to a csr sparse matrix
 
@@ -38,9 +39,11 @@ def range_search_to_csr_matrix(lims,
         output of index.idx.range_search, is range of positions in D and I corresponding 
         to the ith query sequence.
     D 
-        neigbor distanace vector output of index.idx.range_search       
+        neigbor distance vector output of index.idx.range_search       
     I 
         neigbor index vector output of index.idx.range_search
+    shape 
+        optional tuple (n_rows, n_cols) to force matrix size
     Returns
     -------
     csr_mat 
@@ -56,12 +59,25 @@ def range_search_to_csr_matrix(lims,
         # convert distance to an integer
         dx_as_int = [round(x) for x in dx]
         # convert 0 dist to negative 1 for sparsity
-        dx_as_int = [-1 if x == 0 else x for x in dx_as_int]
+        dx_as_int = np.array([-1 if x == 0 else x for x in dx_as_int], dtype = 'int8')
         dist_csr.append([(i,j,d) for j, d in zip(ix, dx_as_int)])
     # flatten list of tuple lists
     dist_csr = np.concatenate(dist_csr)
     row_indices = [row for row, col, val in dist_csr]
     col_indices = [col for row, col, val in dist_csr]
-    values      = [val for row, col, val in dist_csr]
-    csr_mat = csr_matrix((values, (row_indices, col_indices)))
+    values      = np.array([val for row, col, val in dist_csr], dtype = 'int8')
+
+    if shape is None:
+        csr_mat = csr_matrix((values, (row_indices, col_indices)) )
+    else:
+        n_rows, n_cols = shape
+        csr_mat = csr_matrix((values, (row_indices, col_indices)), shape = (n_rows, n_cols), dtype = 'int8')
     return csr_mat
+
+
+
+def query_function(q, index, n_rows, r):
+  lims, D, I = index.range_search(q, thresh=r)
+  csr_mat = range_search_to_csr_matrix(lims, D, I, (q.shape[0], n_rows)) 
+  return csr_mat
+
