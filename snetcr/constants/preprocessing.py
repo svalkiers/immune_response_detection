@@ -97,7 +97,7 @@ def setup_gene_cdr_strings(organism:str='human', chain:str='B'):
     # Get CDR information from gene reference file
     all_genes_df = get_gene_reference()
     all_genes_df = all_genes_df[(all_genes_df.organism==organism)&
-                                # (all_genes_df.chain.isin(list(chain)))&
+                                (all_genes_df.chain.isin(list(chain)))&
                                 (all_genes_df.region=='V')]
     assert all_genes_df.id.value_counts().max()==1
     all_genes_df.set_index('id', inplace=True)
@@ -105,10 +105,12 @@ def setup_gene_cdr_strings(organism:str='human', chain:str='B'):
     vgenes = list(all_genes_df.index)
     gene_cdr_strings = {x:'' for x in vgenes}
     oldgap = '.' # gap character in the all_genes dict
+    # print(gene_cdr_strings)
     for icdr in range(3):
         cdrs = all_genes_df.cdrs.str.get(icdr).str.replace(oldgap,GAPCHAR,regex=False)
         L = len(cdrs[0])
         for i in reversed(range(L)):
+            # print(L)
             col = set(x[i] for x in cdrs)
             if len(col) == 1: # no variation
                 cdrs = [x[:i]+x[i+1:] for x in cdrs]

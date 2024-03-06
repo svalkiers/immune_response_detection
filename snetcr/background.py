@@ -124,8 +124,7 @@ class Background():
         foreground repertore, ie junctions.shape[0]
 
         junctions is a dataframe with information about the V(D)J junctions in the
-        foreground tcrs. Created by the function above this one,
-            "parse_junctions_for_background_resampling"
+        foreground tcrs. Created by the function "_parse_junctions()".
 
         returns a list of tuples [(v,j,cdr3aa,cdr3nt), ...] of length = junctions.shape[0]
         '''
@@ -310,7 +309,7 @@ class Background():
     def process_background(self) -> pd.DataFrame:
         return pd.DataFrame(self.resample_background_tcrs())
 
-    def shuffled_background(self, num_workers=1):
+    def shuffled_background(self, num_workers=1, destination=None):
         '''
         Creates a background repertoire by reshuffling the input repertoire
         n times (n = factor).
@@ -327,12 +326,15 @@ class Background():
         # Combine reshuffled repertoires
         bg = pd.concat(backgrounds)
         bg.columns = [self.v_column, self.j_column, self.cdr3aa_column, self.cdr3nt_column]
+        # Optional: save to disk
+        if destination is not None:
+            bg.to_csv(destination, sep="\t", index=False)
         return bg
 
     def batch_shuffling(self, destination):
         '''
         Performs background shuffling in batches and iteratively stores
-        output on disk.
+        output on disk. 
         '''
         for i in range(self.factor):
             background = self.process_background()

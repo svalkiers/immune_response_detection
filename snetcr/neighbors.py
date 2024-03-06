@@ -150,6 +150,7 @@ def neighbor_retrieval(query, encoder=None, background=None, index_type="exact",
     print("searching for neighbors")
     lims, D, I = index.idx.range_search(query_vecs.astype(np.float32), thresh=d)
     # Build the neighbor dictionary
+    print("Combinding results")
     neighbor_dict = {}
     for n, i in enumerate(query.iterrows()):
         nneigh = lims[n+1]-lims[n]
@@ -215,12 +216,14 @@ class NeighborEnrichment():
         self,
         repertoire:Union[pd.DataFrame, list],
         encoder:TCRDistEncoder=None,
+        organism='human',
         background=None,
         exact=True,
         k=None,
-        n=None
+        n=None,
+        num_workers=1,
+        add_pseudocount=False
         # custom_background=None, -> add this functionality back in later
-        # ncpus:int=1 -> this does not seem to have any influence on the computational performance
         ):
         '''
         Class for calculating and statistically evaluating the neighbor count of 
@@ -234,13 +237,9 @@ class NeighborEnrichment():
             information. Column names should satisfy AIRR data conventions.
         encoder: Union[TCRDistEncoder]
             Transformer function used to embed sequences into vector space.
-        radius: Union[int,float]
-            Radius r that determines the edge of the TCR neighborhood.
         
         '''
         self.repertoire = repertoire
-        # before proceeding, check whether all data fields are formatted correctly
-        check_formatting(self.repertoire)
 
         # self.background = custom_background -> add this functionality back in later
         if encoder == None:
@@ -248,11 +247,19 @@ class NeighborEnrichment():
         else:
             self.encoder = encoder
 
+        # before proceeding, check whether all data fields are formatted correctly
+        if encoder.organism == "human":
+            check_formatting(self.repertoire)
+        else:
+            pass
+        
+        self.organism = organism
         self.rsize = len(repertoire)
         # self.r = radius
         self.background = background
         self.nbr_counts = None
         self.bg_index = None
+        self.num_workers = num_workers
 
         self.encoder.fit()
 
@@ -264,6 +271,11 @@ class NeighborEnrichment():
             if n is None:
                 n = np.round(k/30,0)
             self.fg_index = IvfIndex(encoder=self.encoder, n_centroids=int(k), n_probe=int(n))
+
+        if add_pseudocount:
+            self.pseudocount = 1
+        else:
+            self.pseudocount = 0
 
 
     def fixed_radius_neighbors(self, radius:Union[int,float]=12.5, k=None, n=None):
@@ -316,8 +328,8 @@ class NeighborEnrichment():
                 depth = self.repertoire.shape[0] * ratio
                 print(f'Background index not set up.\nSampling background of size {depth}.')
                 # bg = match_vj_distribution(n=depth, foreground=self.repertoire)
-                seq_gen = Background(repertoire=self.repertoire,factor=ratio)
-                self.background = seq_gen.shuffled_background()
+                seq_gen = Background(repertoire=self.repertoire,factor=ratio,organism=self.organism)
+                self.background = seq_gen.shuffled_background(num_workers=self.num_workers)
                 print("Background contructed.")
             else:
                 pass
@@ -347,8 +359,9 @@ class NeighborEnrichment():
         del bg
         # Compute neighbors
         seq_with_nbrs = self.nbr_counts[self.nbr_counts.neighbors>0]
-        nbrs_in_background = index_neighbors(query=seq_with_nbrs, index=prefilter_index, r=self.r)
-        nbrs_in_background = tcr_dict_to_df(nbrs_in_background, add_counts=True)
+        indexed = index_neighbors(query=seq_with_nbrs, index=prefilter_index, r=self.r)
+        indexed = tcr_dict_to_df(indexed)
+
         # Prep results
         merged = seq_with_nbrs.merge(nbrs_in_background, on=['v_call', 'junction_aa'])
         filtered = merged[merged['neighbors_x']>merged['neighbors_y']]
@@ -376,7 +389,7 @@ class NeighborEnrichment():
             lambda x: hypergeom.sf(
                 x['neighbors']-1, 
                 M, 
-                x['neighbors'] + x['background_neighbors'], 
+                x['neighbors'] + x['background_neighbors'] + self.pseudocount, 
                 N
                 ),
             axis=1
@@ -475,7 +488,7 @@ class NeighborEnrichment():
         
         # Background
         print("Setting up background index...")
-        self._setup_background_index(exhaustive=exhaustive)
+        self._setup_background_index(exhaustive=exhaustive, ratio=ratio)
 
         # Find neighbors in background
         print(f'Computing neighbor counts in background for {len(filtered)} sequences.')
@@ -502,6 +515,8 @@ class NeighborEnrichment():
         print('Performing hypergeometric testing.')
         p_values = self._hypergeometric(data=filtered)
         self.significant = p_values[p_values.pval<=fdr]
+        # self.significant["background_neighbors"] = self.significant["background_neighbors"] / self.ratio
+        # self.significant.columns = ["v_call","junction_aa","observed","expected","pval"]
         return self.significant
 
 def to_dict(query, index):

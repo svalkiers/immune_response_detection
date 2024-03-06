@@ -16,8 +16,6 @@ def sample_tcrs(s:int, background:str=FILENAME, cols:list=['junction_aa','v_call
     skip = sorted(random.sample(range(1,n+1),n-s)) #the 0-indexed header will not be included in the skip list
     return pd.read_csv(background, sep='\t', skiprows=skip)[cols]
 
-example =  list(pd.read_csv('./raptcr/datasets/example_repertoire.tsv', sep='\t').junction_aa.unique())
-example_tcr = pd.read_csv('./raptcr/datasets/example_repertoire.tsv', sep='\t')
 
 def load_yfv_responding():
     responding = pd.read_csv("./analysis/background_testing/yfv/yfv_responding.txt", sep="\t")
@@ -28,7 +26,7 @@ def load_yfv_responding():
 
 def load_vdjdb(chain="B", organism="human", exclude_10x=True, concise=True):
     
-    vdjdb = pd.read_csv("./raptcr/datasets/vdjdb/vdjdb.txt", sep="\t")
+    vdjdb = pd.read_csv("./snetcr/datasets/vdjdb/vdjdb.txt", sep="\t")
     vdjdb.columns = [i.replace(".","_") for i in vdjdb.columns]
 
     ref_map = {

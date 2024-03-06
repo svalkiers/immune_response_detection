@@ -207,7 +207,7 @@ def parse_adaptive_repertoire(name, old=False, recover_unresolved=True):
     return df.reset_index(drop=True)
 
 
-def parse_britanova_repertoires(file):
+def parse_britanova_repertoires(file, count=2):
 
     df = pd.read_csv(file, sep='\t', compression='gzip')
 
@@ -220,7 +220,7 @@ def parse_britanova_repertoires(file):
         'freq':'clone_fraction'
         }
 
-    df = df[df['count']>1]
+    df = df[df['count']>=count]
     df = df[list(cols.keys())]
     df = df.rename(columns=cols)
 
@@ -238,7 +238,7 @@ def parse_britanova_repertoires(file):
 
     return df.reset_index(drop=True)
 
-def parse_yfv_repertoires(file, output='regular'):
+def parse_yfv_repertoires(file, output='regular', count=2):
     
 
     if file.split('.')[-1]=='gz':
@@ -258,7 +258,7 @@ def parse_yfv_repertoires(file, output='regular'):
             'Clone fraction':'clone_fraction'
             }
         # Filter out singlets
-        df = df[df['Clone count']>1]
+        df = df[df['Clone count']>=count]
     else:
         cols = {
             'CDR3.amino.acid.sequence':'junction_aa', 

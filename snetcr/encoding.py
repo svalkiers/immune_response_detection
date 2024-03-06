@@ -78,12 +78,7 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         allowed_chains = ['a','b','alpha','beta','ab','alphabeta','paired']
         assert chain.lower() in allowed_chains, f'Invalid chain {chain}, please select alpha, beta or paired.'
         self.chain = chain
-        
         self.full_tcr = full_tcr
-        if self.full_tcr:
-            self.m = self.aa_dim*self.num_pos + self.aa_dim*21
-        else:
-            self.m = self.aa_dim*self.num_pos 
 
     def __repr__(self):
         return f'TCRDistEncoder(aa_dim={self.aa_dim})'
@@ -198,18 +193,18 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         # !THE FOLLOWING V GENES CONTAIN '*' CHARACTER WHICH IS CAUSING ISSUES WITH THE ENCODING!
         # TRBV12-2*01 -----> FGH-NFFRS-*SIPDGSF
         # TRBV16*02 -------> KGH-S*FQN-ENVLPNSP
-        to_remove = ['TRBV12-2*01','TRBV16*02']
-        n_pre = len(tcrs)
-        tcrs = [i for i in tcrs if i[0] not in to_remove]
-        n_post = len(tcrs)
-        if n_pre-n_post>0:
-            print(f"WARNING: Removed TCRs with {to_remove}. This is a temporary measure to prevent KeyError caused by '*' character.\n")
+        if self.organism == "human":
+            to_remove = ['TRBV12-2*01','TRBV16*02']
+            n_pre = len(tcrs)
+            tcrs = [i for i in tcrs if i[0] not in to_remove]
+            n_post = len(tcrs)
+            if n_pre-n_post>0:
+                print(f"WARNING: Removed TCRs with {to_remove}. This is a temporary measure to prevent KeyError caused by '*' character.\n")
         # Determine the length of the vector
         vec_len = self.aa_dim * (self.num_pos_other_cdrs + self.num_pos)
         # No parallel processing, use a single core
         if self.ncpus == 1:
             vecs = []
-            print("1")
             for tcr in tcrs:
                 v, cdr3 = tcr
                 self._gapped_encoder_v_cdr3(tcr)
@@ -224,6 +219,8 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
             vecs = np.array(pool.map(self._gapped_encoder_v_cdr3, tcrs))
             pool.close()
             pool.join()
+        print(len(self.tcrs), vec_len)
+        print(vecs.shape)
         assert vecs.shape == (len(self.tcrs), vec_len)
         return vecs
 
@@ -237,6 +234,10 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         self.gene_cdr_strings = setup_gene_cdr_strings(self.organism, self.chain)
         self.num_pos_other_cdrs = len(next(iter(self.gene_cdr_strings.values())))
         assert all(len(x)==self.num_pos_other_cdrs for x in self.gene_cdr_strings.values())
+        if self.full_tcr:
+            self.m = self.aa_dim*self.num_pos + self.aa_dim*self.num_pos_other_cdrs
+        else:
+            self.m = self.aa_dim*self.num_pos 
         return self
 
     def transform(self, X: Union[TcrCollection, pd.DataFrame, list, str], y=None) -> np.array:
