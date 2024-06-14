@@ -96,8 +96,19 @@ def get_background_nbr_counts(
         aa_mds_dim=8,
         maxdist=96,
 ):
-    '''
+    ''' Compute the background paired tcrdist distribution by taking the
+    convolution of the alpha and beta single-chain tcrdist distributions.
+    The effective number of paired background comparisons is len(bg_tcrs)**2
+
+    returns an integer-valued numpy array of shape (num_fg_tcrs, maxdist+1)
+
+    histogram bin-size is 1.0
+
+    first bin is (-0.5, 0.5), last bin is (maxdist-0.5, maxdist+0.5)
+
     tcrs and bg_tcrs should already have been filtered
+
+    (see phil_functions.compute_background_paired_tcrdist_distributions)
     '''
 
     fg_avecs = gapped_encode_tcr_chains(
@@ -132,6 +143,10 @@ def get_foreground_nbr_counts(
         radius=96.5,
 ):
     '''
+    Get the faiss data (lims,D,I) for range_search of tcrs against self
+
+    so it will include self-distances
+
     tcrs and bg_tcrs should already have been filtered
     '''
 
@@ -169,6 +184,13 @@ def compute_neighborhood_pvalues(
         pseudocount = 0.25,
         evalue_threshold = 1,
 ):
+    ''' Compute pvalues and simple-bonferroni corrected "evalues"
+    for observed foreground neighbor numbers
+
+    Right now this is using poisson but we could shift to hypergeometric
+    I think for the paired setting where the effective number of background comparisons
+    is very large the two should give pretty similar results
+    '''
     from scipy.stats import poisson
 
     # get background counts at radii
@@ -189,6 +211,13 @@ def compute_neighborhood_pvalues(
 
     assert fg_counts.shape == bg_counts.shape == (num_fg_tcrs, len(radii))
 
+    # "rates" are the expected number of neighbors based on the background counts
+    # we divide background counts by num_bg_tcrs**2 (since that's the effective number
+    # of background paired comparisons) to get the probability of seeing a neighbor
+    # at a given radius, then we multiply by num_fg_tcrs to get the expected number
+    # of neighbors.
+    # rates.shape: (num_fg_tcrs, len(radii))
+    #
     rates = (np.maximum(bg_counts, pseudocount) *
              (num_fg_tcrs/(num_bg_tcrs*num_bg_tcrs)))
 
