@@ -14,7 +14,7 @@ from sys import exit
 import sys
 from os.path import exists
 from glob import glob
-from os import mkdir, system
+from os import mkdir, system, popen
 
 from phil_functions import * # bad, temporary...
 
@@ -22,6 +22,7 @@ import faiss
 import argparse
 from raptcr.constants.modules import tcrdist
 import time
+
 print('tcrdist:', tcrdist)
 
 parser = argparse.ArgumentParser()
@@ -31,6 +32,8 @@ parser.add_argument('--sleeptime', type=float, default=0)
 parser.add_argument('--fg_filename')
 parser.add_argument('--bg_filename')
 parser.add_argument('--bg_filenames', nargs='*')
+parser.add_argument('--avg_filename')
+parser.add_argument('--mask_filename')
 parser.add_argument('--outfile_prefix')
 parser.add_argument('--outfile')
 parser.add_argument('--max_tcrs', type=int)
@@ -56,6 +59,12 @@ parser.add_argument('--min_fg_bg_nbr_ratio', type=float, default=2.0)
 parser.add_argument('--clobber', action='store_true')
 
 args = parser.parse_args()
+
+# debugging
+hostname = popen('hostname').readlines()[0].strip()
+msg = f'hostname: {hostname} mode: {args.mode}'
+print(msg, flush=True)
+sys.stderr.write(msg+'\n')
 
 if args.mode == 'brit_vs_brit': # britanov-vs-britanova neighbor calculation
 
@@ -414,7 +423,8 @@ elif args.mode == 'vector_knns':
 
     organism = 'human'
     print('reading:', args.filename)
-    fg_vecs = np.load(args.filename)
+    #fg_vecs = np.load(args.filename)
+    fg_vecs = np.ascontiguousarray(np.load(args.filename))
 
     qvecs = fg_vecs[args.start_index:args.stop_index]
 
@@ -429,6 +439,50 @@ elif args.mode == 'vector_knns':
 
     np.save(f'{outprefix}_D.npy', D)
     np.save(f'{outprefix}_I.npy', I)
+
+
+elif args.mode == 'vector_knns_average':
+    sleeptime = args.sleeptime * random.random()
+    print('sleeping:', sleeptime)
+    time.sleep(sleeptime)
+
+    organism = 'human'
+    print('reading:', args.filename)
+    #fg_vecs = np.load(args.filename)
+    fg_vecs = np.ascontiguousarray(np.load(args.filename))
+    avg_vecs = np.ascontiguousarray(np.load(args.avg_filename))
+
+    qvecs = fg_vecs[args.start_index:args.stop_index]
+
+    fg_s0, fg_s1 = fg_vecs.shape
+
+    if args.mask_filename is not None:
+        mask = np.load(args.mask_filename)
+        assert mask.shape[0] == fg_vecs.shape[0] == avg_vecs.shape[0]
+        fg_vecs = fg_vecs[mask]
+        avg_vecs = avg_vecs[mask]
+
+    print('start IndexFlatL2 knn search', args.num_nbrs, qvecs.shape, fg_vecs.shape)
+    start = timer()
+    idx = faiss.IndexFlatL2(fg_vecs.shape[1])
+    idx.add(fg_vecs)
+    D, I = idx.search(qvecs, args.num_nbrs)
+    print(f'IndexFlatL2 knn search took {timer()-start:.2f}')
+    outprefix = (f'{args.outfile_prefix}_{args.num_nbrs}_{args.start_index}_'
+                 f'{args.stop_index}_{fg_s0}_{fg_s1}')
+
+    # average avg_vecs over I
+    # worry about memory
+    l = []
+    for ii in range(avg_vecs.shape[1]):
+        col = avg_vecs[:,ii]
+        avg = col[I].sum(axis=-1, keepdims=True)/args.num_nbrs
+        l.append(avg)
+
+    avg = np.hstack(l)
+    assert avg.shape == (I.shape[0], avg_vecs.shape[1])
+
+    np.save(f'{outprefix}_avg.npy', avg)
 
 
 elif args.mode == 'make_bg': # make and save background file

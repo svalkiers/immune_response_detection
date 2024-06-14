@@ -231,6 +231,24 @@ def read_paired_data(fname):
 ######################################################################################88
 
 
+if 0: # subset to tsang tcrs
+
+    oldfiltfile = f'{DATADIR}phil/big_combo_tcrs_2024-02-02_filt.tsv'
+    newfiltfile = f'{DATADIR}phil/big_combo_tcrs_2024-02-02_tsang.tsv'
+
+    df = pd.read_table(oldfiltfile, low_memory=False)
+
+    mask = df.cohort == 'p_tsang'
+    print('subset to tsang tcrs:', mask.sum(), 'of', df.shape[0])
+
+    df = df[mask].copy()
+
+    df.to_csv(newfiltfile, sep='\t', index=False)
+    print('made:', newfiltfile)
+    exit()
+
+
+
 if 0: # test background resampling functions
 
     fname = ('/home/pbradley/gitrepos/immune_response_detection/'
@@ -250,7 +268,48 @@ if 0: # test background resampling functions
 
     exit()
 
-if 0: # try neighborhood clustering of the clumping hits
+
+
+if 0: # clumping step 0b
+    # rename tcrs file
+    #
+    # add this code to make it explicit what we must have done before, since
+    # these files are identical
+
+    '''rhino02 slurm$ md5sum  ~/csdat/big_covid/big_combo_tcrs_2023-03-07b.tsv  ~/gitrepos/immune_response_detection/data/phil/paired_sample_filt.tsv
+f3945f0e901f7cc3fbfbbe3cf7e7801e  /home/pbradley/csdat/big_covid/big_combo_tcrs_2023-03-07b.tsv
+f3945f0e901f7cc3fbfbbe3cf7e7801e  /home/pbradley/gitrepos/immune_response_detection/data/phil/paired_sample_filt.tsv'''
+
+    ## this is for consistency with the big_covid pipeline, which expects a
+    ## TCRs file and clumps file whose names "match"
+    oldfile = DATADIR+'phil/big_combo_tcrs_2024-02-02_filt.tsv'
+    newfile = '/home/pbradley/csdat/big_covid/big_combo_tcrs_2024-02-02a.tsv'
+
+    # oldfile = DATADIR+'phil/big_combo_tcrs_2024-01-18_filt.tsv'
+    # newfile = '/home/pbradley/csdat/big_covid/big_combo_tcrs_2024-01-18a.tsv'
+
+    # oldfile = DATADIR+'phil/big_combo_tcrs_2023-12-17_filt.tsv'
+    # newfile = '/home/pbradley/csdat/big_covid/big_combo_tcrs_2023-12-17a.tsv'
+
+    # oldfile = DATADIR+'phil/big_combo_tcrs_2023-11-22_filt.tsv'
+    # newfile = '/home/pbradley/csdat/big_covid/big_combo_tcrs_2023-11-22a.tsv'
+
+    # oldfile = DATADIR+'phil/paired_sample_filt.tsv'
+    # newfile = '/home/pbradley/csdat/big_covid/big_combo_tcrs_2023-03-07b.tsv'
+
+    assert exists(oldfile)
+    assert not exists(newfile)
+
+    cmd = f'cp {oldfile} {newfile}'
+    print(cmd)
+    system(cmd)
+
+    exit()
+
+
+if 1: # clumping step 3
+    # try neighborhood clustering of the clumping hits
+
     import igraph as ig
     import faiss
 
@@ -273,22 +332,46 @@ if 0: # try neighborhood clustering of the clumping hits
     }
 
 
-    if 0:
-        fname = DATADIR+'phil/paired_sample_filt_clumping_pvals_run20_run21_evt_100.tsv'
+    if 2:
+        # max_impurity=0.2, CLASSIC=False, evalue_threshold = 1.
+        fname = DATADIR+'phil/zenaim_filt_clumping_pvals_run105_run106_evt_100.tsv'
+        renamed_outfile = '/home/pbradley/csdat/koelle/zenaim/clumps.tsv' ; min_group_size = 3
+        # fname = DATADIR+'phil/big_combo_tcrs_2024-02-02_tsang_clumping_pvals_run103_run104_evt_100.tsv'
+        # renamed_outfile = ('/home/pbradley/csdat/big_covid/'
+        #                    'big_combo_tcrs_2024-02-02a_tsang_gp4.tsv')
+        # fname = DATADIR+'phil/big_combo_tcrs_2024-02-02_filt_clumping_pvals_run59_run61_evt_100.tsv'
+        # renamed_outfile = ('/home/pbradley/csdat/big_covid/'
+        #                    'big_combo_tcrs_2024-02-02a_gp4.tsv')
+        # fname = DATADIR+'phil/big_combo_tcrs_2024-01-18_filt_clumping_pvals_run55_run56_evt_100.tsv'
+        # renamed_outfile = ('/home/pbradley/csdat/big_covid/'
+        #                    'big_combo_tcrs_2024-01-18a_gp4.tsv')
+        # fname = DATADIR+'phil/big_combo_tcrs_2023-12-17_filt_clumping_pvals_run53_run54_evt_100.tsv'
+        # renamed_outfile = ('/home/pbradley/csdat/big_covid/'
+        #                    'big_combo_tcrs_2023-12-17a_gp4.tsv')
+        # fname = DATADIR+'phil/big_combo_tcrs_2023-11-22_filt_clumping_pvals_run48_run49_evt_100.tsv'
+        # fname = DATADIR+'phil/paired_sample_filt_clumping_pvals_run20_run21_evt_100.tsv'
         CLASSIC = False
     else:
         fname = ('/home/pbradley/csdat/big_covid/'
                  'big_combo_tcrs_2023-03-07_clumping_results_vjpair_nr1M_P100.tsv')
         CLASSIC = True
+        # legacy: will fail now since renamed_outfile undefined
 
     lrtag = '_'.join(map(str,leiden_radii))
     outfile = (f'{fname[:-4]}_r{lrtag}_evt_{evalue_threshold:.1f}_'
                f'mi_{max_impurity:.3f}_nbrhood.tsv')
 
 
+
+    # oops this one got overwritten!!!! need to re-run if we want it again
+    # # 22a max_impurity=0.2, CLASSIC=False, evalue_threshold = 1.
+    # renamed_outfile = ('/home/pbradley/csdat/big_covid/'
+    #                    'big_combo_tcrs_2023-11-22a_gp4.tsv') # matches block above
+
+
     # 7e: max_impurity=0.2 ; classic clumping results
-    renamed_outfile = ('/home/pbradley/csdat/big_covid/'
-                       'big_combo_tcrs_2023-03-07e_gp4.tsv')
+    # renamed_outfile = ('/home/pbradley/csdat/big_covid/'
+    #                    'big_combo_tcrs_2023-03-07e_gp4.tsv')
 
     # 7d: max_impurity=0.2
     # renamed_outfile = ('/home/pbradley/csdat/big_covid/'
@@ -378,6 +461,11 @@ if 0: # try neighborhood clustering of the clumping hits
             vertex2tcr.pop(v)
         if g.vcount()==0:
             break
+        # some groups are smaller than this, maybe because there can be multiple edges
+        # between nodes if they are closer than smaller distance thresholds...
+        # right, for each threshold we add edges between all pairs of tcrs
+        # that are significant at that threshold and closer than (<=) that threshold
+        #
         if g.maxdegree()+1 < min_group_size:
             break
 
@@ -422,22 +510,24 @@ if 0: # try single-linkage clustering of the clumping hits
 
     organism = 'human'
     aa_mds_dim = 8
+    evalue_threshold= 1.
 
     #leiden_radii = [24]
     leiden_radii = [24,48,72,96]
 
-    threshold= 1.
-    fname = DATADIR+'phil/paired_sample_filt_clumping_pvals_run20_run21_evt_100.tsv'
+    fname = DATADIR+'phil/big_combo_tcrs_2024-02-02_tsang_clumping_pvals_run103_run104_evt_100.tsv'
+    renamed_outfile = ('/home/pbradley/csdat/big_covid/'
+                       'big_combo_tcrs_2024-02-02b_tsang_gp4.tsv')
+
+    #fname = DATADIR+'phil/paired_sample_filt_clumping_pvals_run20_run21_evt_100.tsv'
+    # use 2023-03-07b !!!
+    #renamed_outfile = ('/home/pbradley/csdat/big_covid/big_combo_tcrs_2023-03-07b_'
+    #                   'clumping_results_vjpair_nr1M_P100.tsv')
     lrtag = '_'.join(map(str,leiden_radii))
     outfile = f'{fname[:-4]}_r{lrtag}_single.tsv'
 
-
-    # use 2023-03-07b !!!
-    renamed_outfile = ('/home/pbradley/csdat/big_covid/big_combo_tcrs_2023-03-07b_'
-                       'clumping_results_vjpair_nr1M_P100.tsv')
-
     results = pd.read_table(fname)
-    results = results[results.evalue <= threshold]
+    results = results[results.evalue <= evalue_threshold]
 
     tcrs = results.sort_values(['evalue','radius']).drop_duplicates('tcr_index')
     tcr_index2tcrs_index = {x:i for i,x in enumerate(tcrs.tcr_index)}
@@ -643,28 +733,64 @@ if 0: # find cohorts with highest density of clumping hits
 
     exit()
 
-if 0: # read the results of the paired tcr clumping calcs
+if 0: # clumping step 2
+    # read the results of the paired tcr clumping calcs
     from scipy.stats import poisson
-
-    # fg range search info:
-    njobs = 310
     jobsize = 10000
+
+
+    fg_runtag = 'run105' # range_search with fg_vecs
+    bg_runtag = 'run106' # single-chain matching to bg a+b vecs
+    fg_filename = f'{DATADIR}phil/zenaim_filt.tsv'
+    num_fg_tcrs = 18422 # in fg_filename
+    njobs = 1 ; jobsize = 30000
+    # fg_runtag = 'run103' # range_search with fg_vecs
+    # bg_runtag = 'run104' # single-chain matching to bg a+b vecs
+    # fg_filename = f'{DATADIR}phil/big_combo_tcrs_2024-02-02_tsang.tsv'
+    # num_fg_tcrs = 84369 # in fg_filename
+    # njobs = 9
+    # fg_runtag = 'run59' # range_search with fg_vecs
+    # bg_runtag = 'run61' # single-chain matching to bg a+b vecs
+    # fg_filename = f'{DATADIR}phil/big_combo_tcrs_2024-02-02_filt.tsv'
+    # num_fg_tcrs = 3971185 # in fg_filename
+    # njobs = 398
+    # fg_runtag = 'run55' # range_search with fg_vecs
+    # bg_runtag = 'run56' # single-chain matching to bg a+b vecs
+    # fg_filename = f'{DATADIR}phil/big_combo_tcrs_2024-01-18_filt.tsv'
+    # num_fg_tcrs = 3882371 # in fg_filename
+    # njobs = 389
+    # fg_runtag = 'run53' # range_search with fg_vecs
+    # bg_runtag = 'run54' # single-chain matching to bg a+b vecs
+    # fg_filename = f'{DATADIR}phil/big_combo_tcrs_2023-12-17_filt.tsv'
+    # num_fg_tcrs = 3926238 # in fg_filename
+    # njobs = 393
+    # fg_runtag = 'run48' # range_search with fg_vecs
+    # bg_runtag = 'run49' # single-chain matching to bg a+b vecs
+    # fg_filename = f'{DATADIR}phil/big_combo_tcrs_2023-11-22_filt.tsv'
+    # num_fg_tcrs = 3889692  # in fg_filename
+    # njobs = 389
+    # fg_runtag = 'run20' # range_search with fg_vecs
+    # bg_runtag = 'run21' # single-chain matching to bg a+b vecs
+    # fg_filename = f'{DATADIR}phil/paired_sample_filt.tsv'
+    # num_fg_tcrs = 3097957  # in fg_filename
+    # njobs = 310
+    #jobsize = 10000
     num_bg_tcrs = 250000
     maxdist = 96
     radii = [24, 48, 72, 96]
-    num_fg_tcrs = 3097957  # in fg_filename
     ab_veclen = 568
     min_nbrs = 2 # tcr_clumping uses 1?
     pseudocount = 0.25
-    fg_runtag = 'run20' # range_search with fg_vecs
-    bg_runtag = 'run21' # single-chain matching to bg a+b vecs
     evalue_threshold = 100
 
-    fg_filename = f'{DATADIR}phil/paired_sample_filt.tsv'
+    assert njobs == (num_fg_tcrs-1)//jobsize + 1 # sanity, or could just calc here!
 
     print('reading:', fg_filename)
     tcrs = pd.read_table(fg_filename)
     assert tcrs.shape[0] == num_fg_tcrs
+    if 'cohort' not in tcrs.columns:
+        print('make fake cohort data')
+        tcrs['cohort'] = 'cohort_1'
 
     outfile = (f'{fg_filename[:-4]}_clumping_pvals_{fg_runtag}_{bg_runtag}_'
                f'evt_{evalue_threshold}.tsv')
@@ -843,7 +969,8 @@ finished: 192.54
     '''
 
 
-if 0: # setup for some background distn searches
+if 0: # clumping step 1
+    # setup for some background distn searches
     PY = '/home/pbradley/miniconda3/envs/raptcr/bin/python'
     EXE = '/home/pbradley/gitrepos/immune_response_detection/phil_running.py'
 
@@ -851,16 +978,29 @@ if 0: # setup for some background distn searches
     num_bg_tcrs = 250000
     aa_mds_dim = 8
     job_size = 10000
-    runtag = 'run21'
+    runtag = 'run106' ; job_size  = 30000
+    fg_filename = f'{DATADIR}phil/zenaim_filt.tsv'
+    # runtag = 'run104'
+    # fg_filename = f'{DATADIR}phil/big_combo_tcrs_2024-02-02_tsang.tsv'
+    # runtag = 'run61'
+    # fg_filename = f'{DATADIR}phil/big_combo_tcrs_2024-02-02_filt.tsv'
+    # runtag = 'run56'
+    # fg_filename = f'{DATADIR}phil/big_combo_tcrs_2024-01-18_filt.tsv'
+    # runtag = 'run54'
+    # fg_filename = f'{DATADIR}phil/big_combo_tcrs_2023-12-17_filt.tsv'
+    # runtag = 'run49'
+    # fg_filename = f'{DATADIR}phil/big_combo_tcrs_2023-11-22_filt.tsv'
+    # runtag = 'run21'
+    # fg_filename = f'{DATADIR}phil/paired_sample_filt.tsv'
     xargs = ' --sleeptime 30 '
 
-    fg_filename = f'{DATADIR}phil/paired_sample_filt.tsv'
     bg_filename = f'{DATADIR}phil/paired_bg_tcrs_250000.tsv'
 
     rundir = f'/home/pbradley/csdat/raptcr/slurm/{runtag}/'
     if not exists(rundir):
         mkdir(rundir)
 
+    assert exists(bg_filename) and exists(fg_filename)
     cmds_file = f'{rundir}{runtag}_commands.txt'
     assert not exists(cmds_file)
     out = open(cmds_file,'w')
@@ -890,12 +1030,18 @@ if 0: # setup for some background distn searches
     exit()
 
 
-if 0: # filter the tcrs from the round4 merged file
-    bigfile = '/home/pbradley/csdat/big_covid/round4_merged_common_genes_obs.tsv'
-    filtfile = f'{DATADIR}phil/round4_merged_filt.tsv'
+if 0: # metaconga step 6
+    # filter the tcrs from the round4 or round6... merged file
+    # so we can get TCR KNNs for hotspot analysis
+    bigfile = '/home/pbradley/csdat/big_covid/round8_merged_common_genes_obs.tsv'
+    filtfile = f'{DATADIR}phil/round8_merged_filt.tsv'
+    # bigfile = '/home/pbradley/csdat/big_covid/round6_merged_common_genes_obs.tsv'
+    # filtfile = f'{DATADIR}phil/round6_merged_filt.tsv'
+    # bigfile = '/home/pbradley/csdat/big_covid/round4_merged_common_genes_obs.tsv'
+    # filtfile = f'{DATADIR}phil/round4_merged_filt.tsv'
 
     print('reading:', bigfile)
-    tcrs = pd.read_table(bigfile)
+    tcrs = pd.read_table(bigfile, low_memory=False)
     old_num = tcrs.shape[0]
     print('read:', old_num, bigfile)
 
@@ -922,7 +1068,7 @@ if 0: # filter the tcrs from the round4 merged file
 
     exit()
 
-if 1: # setup for some knn searches from vector inputs (here metaconga GEX pcs)
+if 0: # setup for some knn searches from vector inputs (here metaconga GEX pcs)
     # multi-runtag version
     PY = '/home/pbradley/miniconda3/envs/raptcr/bin/python'
     EXE = '/home/pbradley/gitrepos/immune_response_detection/phil_running.py'
@@ -978,7 +1124,140 @@ round4_v3b_run69_208_process_v1_leiden2_gex_pcs.npy
     exit()
 
 
-if 0: # setup for some knn searches from vector inputs (here metaconga GEX pcs)
+
+if 0: # metaconga step ??
+    # setup to average tcr aa vecs over GEX neighbors
+    PY = '/home/pbradley/miniconda3/envs/raptcr/bin/python'
+    EXE = '/home/pbradley/gitrepos/immune_response_detection/phil_running.py'
+
+    job_size = 10000
+    xargs = ' --sleeptime 30 '
+    mode = 'vector_knns_average'
+    num_nbrs = 5001
+    mask_filename = None
+
+    #runtag = 'run86' # KNN w/ GEX pcs for round8_v4cd4, avg cdr3 aas
+    #runtag = 'run86m' # KNN w/ GEX pcs for round8_v4cd4, avg cdr3 aas, clump-MASKED!
+    #runtag = 'run88' # KNN w/ GEX pcs for round8_v4cd4, avg v/j genes
+    #runtag = 'run88m' # KNN w/ GEX pcs for round8_v4cd4, avg v/j genes
+    #runtag = 'run90' # KNN w/ GEX pcs for round8_v4cd4, avg tcr features
+    #runtag = 'run90m' # KNN w/ GEX pcs for round8_v4cd4, avg tcr features
+    #runtag = 'run82' # KNN w/ GEX pcs for round8_v4cd4, avg gex vecs, not run yet
+    #runtag = 'run94' # KNN w/ raw genes, clone size, and is_clumped
+    #runtag = 'run94m' # KNN w/ raw genes, clone size, and is_clumped
+    #runtag = 'run102' # KNN w/ more genes
+    runtag = 'run102m' # KNN w/ more genes
+    expected_vecs_shape = (2599503, 20)
+    vecs_file     = '/home/pbradley/csdat/big_covid/round8_v5cd4_run84_xribo_200_process_v1_gex_pcs.npy'
+    #avg_vecs_file = '/home/pbradley/csdat/big_covid/round8_v5cd4_run84_xribo_200_process_v1_leiden2_obs_tcr_aas.npy'
+    #avg_vecs_file = '/home/pbradley/csdat/big_covid/round8_v5cd4_run84_xribo_200_process_v1_leiden2_obs_tcr_genes.npy'
+    #avg_vecs_file = '/home/pbradley/csdat/big_covid/round8_v5cd4_run84_xribo_200_process_v1_tcr_features_X_features.npy'
+    #avg_vecs_file = vecs_file
+    #avg_vecs_file = '/home/pbradley/csdat/big_covid/round8_v5cd4_run84_xribo_200_process_v1_leiden2_raw_X_clone_size_clumped.npy'
+    avg_vecs_file = '/home/pbradley/csdat/big_covid/round8_v5cd4_run84_xribo_200_process_v1_leiden2_exgenes_X.npy'
+    mask_filename = '/home/pbradley/csdat/big_covid/round8_v5cd4_run84_xribo_200_process_v1_leiden2_is_sz5_unclumped.npy'
+
+
+    #runtag = 'run85' # KNN w/ GEX pcs for round8_v4cd8, avg cdr3 aas
+    #runtag = 'run85m' # KNN w/ GEX pcs for round8_v4cd8, avg cdr3 aas, w/ MASK!
+    #runtag = 'run87' # KNN w/ GEX pcs for round8_v4cd8, avg v/j genes
+    #runtag = 'run87m' # KNN w/ GEX pcs for round8_v4cd8, avg v/j genes
+    #runtag = 'run89' # KNN w/ GEX pcs for round8_v4cd8, avg tcr features
+    #runtag = 'run89m' # KNN w/ GEX pcs for round8_v4cd8, avg tcr features
+    #runtag = 'run91' # KNN w/ GEX pcs for round8_v4cd8, avg gex pcs # NOT RUN YET!
+    #runtag = 'run93' # KNN w/ raw genes, clone size, and is_clumped
+    #runtag = 'run93m' # KNN w/ raw genes, clone size, and is_clumped
+    #runtag = 'run101' # GEX KNN avg additional genes not in top200 hs set
+    #runtag = 'run101m' # GEX KNN avg additional genes not in top200 hs set
+    #expected_vecs_shape = (815535, 20)
+    #vecs_file =     '/home/pbradley/csdat/big_covid/round8_v5cd8_run84_xribo_200_process_v1_leiden2_gex_pcs.npy'
+    #avg_vecs_file = '/home/pbradley/csdat/big_covid/round8_v5cd8_run84_xribo_200_process_v1_leiden2_obs_tcr_aas.npy'
+    #avg_vecs_file = '/home/pbradley/csdat/big_covid/round8_v5cd8_run84_xribo_200_process_v1_leiden2_obs_tcr_genes.npy'
+    #avg_vecs_file = '/home/pbradley/csdat/big_covid/round8_v5cd8_run84_xribo_200_process_v1_tcr_features_X_features.npy'
+    #avg_vecs_file = vecs_file
+    #avg_vecs_file = '/home/pbradley/csdat/big_covid/round8_v5cd8_run84_xribo_200_process_v1_leiden2_raw_X_clone_size_clumped.npy'
+    #avg_vecs_file = '/home/pbradley/csdat/big_covid/round8_v5cd8_run84_xribo_200_process_v1_leiden2_exgenes_X.npy'
+    #mask_filename = '/home/pbradley/csdat/big_covid/round8_v5cd8_run84_xribo_200_process_v1_leiden2_is_sz5_unclumped.npy'
+
+
+    ################## round8_v4:
+
+    # runtag = 'run76' # KNN w/ GEX pcs for round8_v4cd4, avg cdr3 aas
+    #runtag = 'run78' # KNN w/ GEX pcs for round8_v4cd4, avg v/j genes
+    #runtag = 'run80' # KNN w/ GEX pcs for round8_v4cd4, avg tcr features
+    #runtag = 'run82' # KNN w/ GEX pcs for round8_v4cd4, avg gex vecs
+    #runtag = 'run84' # KNN w/ raw genes, clone size, and is_clumped
+    #expected_vecs_shape = (2676334, 20)
+    #vecs_file     = '/home/pbradley/csdat/big_covid/round8_v4cd4_run84_xribo_200_process_v1_gex_pcs.npy'
+    # avg_vecs_file = '/home/pbradley/csdat/big_covid/round8_v4cd4_run84_xribo_200_process_v1_leiden2_obs_tcr_aas.npy'
+    #avg_vecs_file = '/home/pbradley/csdat/big_covid/round8_v4cd4_run84_xribo_200_process_v1_leiden2_obs_tcr_genes.npy'
+    #avg_vecs_file = '/home/pbradley/csdat/big_covid/round8_v4cd4_run84_xribo_200_process_v1_tcr_features_X_features.npy'
+    #avg_vecs_file = vecs_file
+    #avg_vecs_file = '/home/pbradley/csdat/big_covid/round8_v4cd4_run84_xribo_200_process_v1_leiden2_raw_X_clone_size_clumped.npy'
+
+
+    # runtag = 'run75' # KNN w/ GEX pcs for round8_v4cd8, avg cdr3 aas
+    # runtag = 'run77' # KNN w/ GEX pcs for round8_v4cd8, avg v/j genes
+    # runtag = 'run79' # KNN w/ GEX pcs for round8_v4cd8, avg tcr features
+    #runtag = 'run81' # KNN w/ GEX pcs for round8_v4cd8, avg gex pcs
+    #runtag = 'run83' # KNN w/ raw genes, clone size, and is_clumped
+    #expected_vecs_shape = (830120, 20)
+    #vecs_file =     '/home/pbradley/csdat/big_covid/round8_v4cd8_run84_xribo_200_process_v1_leiden2_gex_pcs.npy'
+    # # # avg_vecs_file = '/home/pbradley/csdat/big_covid/round8_v4cd8_run84_xribo_200_process_v1_leiden2_obs_tcr_aas.npy'
+    # # avg_vecs_file = '/home/pbradley/csdat/big_covid/round8_v4cd8_run84_xribo_200_process_v1_leiden2_obs_tcr_genes.npy'
+    # avg_vecs_file = '/home/pbradley/csdat/big_covid/round8_v4cd8_run84_xribo_200_process_v1_tcr_features_X_features.npy'
+    #avg_vecs_file = vecs_file
+    #avg_vecs_file = '/home/pbradley/csdat/big_covid/round8_v4cd8_run84_xribo_200_process_v1_leiden2_raw_X_clone_size_clumped.npy'
+
+
+
+
+
+
+
+
+    ##################################################################################88
+    rundir = f'/home/pbradley/csdat/raptcr/slurm/{runtag}/'
+    if not exists(rundir):
+        mkdir(rundir)
+
+    cmds_file = f'{rundir}{runtag}_commands.txt'
+    assert not exists(cmds_file)
+    out = open(cmds_file,'w')
+
+    print('reading:', vecs_file)
+    vecs = np.load(vecs_file)
+    assert vecs.shape == expected_vecs_shape
+    print('reading:', avg_vecs_file)
+    avg_vecs = np.load(avg_vecs_file)
+    assert avg_vecs.shape[0] == vecs.shape[0]
+    num_tcrs = vecs.shape[0]
+
+    num_jobs = (num_tcrs-1)//job_size+1
+
+    xxargs = f' --num_nbrs {num_nbrs} '
+    if mask_filename:
+        xxargs += f' --mask_filename {mask_filename} '
+
+    for job in range(num_jobs):
+        start = job*job_size
+        stop = (job+1)*job_size
+
+        outfile_prefix = f'{rundir}{runtag}_{job}'
+        cmd = (f'{PY} {EXE} {xargs} {xxargs} --mode {mode} '
+               f' --filename {vecs_file} --avg_filename {avg_vecs_file} '
+               f' --start_index {start} --stop_index {stop} '
+               f' --outfile_prefix {outfile_prefix} '
+               f' > {outfile_prefix}.log 2> {outfile_prefix}.err')
+        out.write(cmd+'\n')
+    out.close()
+    print('made:', num_jobs, cmds_file)
+    exit()
+
+
+
+if 0: # metaconga step 19
+    # setup for some knn searches from vector inputs (here metaconga GEX pcs)
     PY = '/home/pbradley/miniconda3/envs/raptcr/bin/python'
     EXE = '/home/pbradley/gitrepos/immune_response_detection/phil_running.py'
 
@@ -987,10 +1266,46 @@ if 0: # setup for some knn searches from vector inputs (here metaconga GEX pcs)
     mode = 'vector_knns'
     num_nbrs = 501
 
+    runtag = 'run96' # KNN w/ GEX pcs
+    expected_vecs_shape = (2599503, 20)
+    vecs_file='/home/pbradley/csdat/big_covid/round8_v5cd4_run84_xribo_200_process_v1_gex_pcs.npy'
 
-    runtag = 'run39' # KNN w/ GEX pcs for round4-combo, top200 hotspot genes
-    expected_vecs_shape = (647204, 20)
-    vecs_file='/home/pbradley/csdat/big_covid/round4_v3c_process_v1_leiden2_gex_pcs.npy'
+    # runtag = 'run95' # KNN w/ GEX pcs
+    # expected_vecs_shape = (815535, 20)
+    # vecs_file='/home/pbradley/csdat/big_covid/round8_v5cd8_run84_xribo_200_process_v1_gex_pcs.npy'
+
+    # runtag = 'run72' # KNN w/ GEX pcs for round8_v4cd4
+    # expected_vecs_shape = (2676334, 20)
+    # vecs_file='/home/pbradley/csdat/big_covid/round8_v4cd4_run84_xribo_200_process_v1_gex_pcs.npy'
+
+    # runtag = 'run69' # KNN w/ GEX pcs for round8_v4cd8
+    # expected_vecs_shape = (830120, 20)
+    # vecs_file='/home/pbradley/csdat/big_covid/round8_v4cd8_run84_xribo_200_process_v1_leiden2_gex_pcs.npy'
+
+    # runtag = 'run64' # KNN w/ GEX pcs for round8_v3cd4
+    # expected_vecs_shape = (2775426, 20)
+    # vecs_file='/home/pbradley/csdat/big_covid/round8_v3cd4_run84_xribo_200_process_v1_leiden2_gex_pcs.npy'
+
+    # runtag = 'run63' # KNN w/ GEX pcs for round8_v3cd8
+    # expected_vecs_shape = (947664, 20)
+    # vecs_file='/home/pbradley/csdat/big_covid/round8_v3cd8_run84_xribo_200_process_v1_leiden2_gex_pcs.npy' #round8_v3cd8_run84_xribo_200_process_v1_gex_pcs.npy'
+
+    # runtag = 'run62' # KNN w/ GEX pcs for round8
+    # expected_vecs_shape = (3903971, 20)
+    # vecs_file='/home/pbradley/csdat/big_covid/round8_merged_common_genes_run84_xribo_top200_hotspot_genes_process_v1_gex_pcs.npy'
+
+    # runtag = 'run52' # KNN w/ GEX pcs for
+    # expected_vecs_shape = (3818745, 20)
+    # vecs_file='/home/pbradley/csdat/big_covid/round6_merged_common_genes_run75_xribo_top200_hotspot_genes_process_v1_gex_pcs.npy'
+
+    # runtag = 'run51' # KNN w/ GEX pcs for
+    # expected_vecs_shape = (816035, 20)
+    # vecs_file='/home/pbradley/csdat/big_covid/round6_v5b_run75_xribo_200_process_v1_gex_pcs.npy'
+
+
+    # runtag = 'run39' # KNN w/ GEX pcs for round4-combo, top200 hotspot genes
+    # expected_vecs_shape = (647204, 20)
+    # vecs_file='/home/pbradley/csdat/big_covid/round4_v3c_process_v1_leiden2_gex_pcs.npy'
 
     # runtag = 'run37' # KNN w/ GEX pcs for round4-combo, top200 hotspot genes
     # expected_vecs_shape = (2049073, 20)
@@ -1049,16 +1364,118 @@ if 0: # setup for some knn searches from vector inputs (here metaconga GEX pcs)
 
 
 if 0: # setup for some range and knn searches
+    # clumping step 0
+    # metaconga step 7
     PY = '/home/pbradley/miniconda3/envs/raptcr/bin/python'
     EXE = '/home/pbradley/gitrepos/immune_response_detection/phil_running.py'
 
+    xargs = ' --sleeptime 30 '
     aa_mds_dim = 8
     job_size = 10000
 
-    mode = 'paired_knns'
-    num_nbrs = 501
-    runtag = 'run38'
-    filtfile = '/home/pbradley/csdat/big_covid/round4_v3c_filt_tcrs.tsv'
+    # round8 for clumping (redo)
+    mode = 'paired_ranges'
+    radius = 96.5
+    bigfile = '/home/pbradley/csdat/koelle/zenaim/all_uniq_tcrs.tsv'
+    filtfile = f'{DATADIR}phil/zenaim_filt.tsv'
+    runtag = 'run105' ; job_size = 30000
+
+    # # round8 for clumping (redo)
+    # mode = 'paired_ranges'
+    # radius = 96.5
+    # bigfile = None
+    # filtfile = f'{DATADIR}phil/big_combo_tcrs_2024-02-02_tsang.tsv'
+    # runtag = 'run103'
+
+    # round8 for clumping (redo)
+    # mode = 'paired_ranges'
+    # radius = 96.5
+    # bigfile = '/home/pbradley/csdat/big_covid/big_combo_tcrs_2024-02-02.tsv'
+    # filtfile = f'{DATADIR}phil/big_combo_tcrs_2024-02-02_filt.tsv'
+    # runtag = 'run59'
+
+
+    # range searching for new style g-v-g
+    #filtfile = '/home/pbradley/csdat/big_covid/round8_v5cd4_filt_tcrs.tsv'
+    #filtfile = '/home/pbradley/csdat/big_covid/round8_v5cd8_filt_tcrs.tsv'
+    #runtag = 'run99' # v5cd8
+    #runtag = 'run100' # v5cd4
+    #mode = 'paired_knns'
+    #num_nbrs = 501
+    #runtag = 'run97' # v5cd8
+    #runtag = 'run98' # v5cd4
+    #mode = 'paired_ranges'
+    #radius = 120.5
+
+    # # range searching for new style g-v-g
+    # filtfile = '/home/pbradley/csdat/big_covid/round8_v4cd4_filt_tcrs.tsv'
+    # #runtag = 'run73' # v4cd4
+    # #mode = 'paired_knns'
+    # #num_nbrs = 501
+    # runtag = 'run74' # v4cd4
+    # mode = 'paired_ranges'
+    # radius = 120.5
+
+    # filtfile = '/home/pbradley/csdat/big_covid/round8_v4cd8_filt_tcrs.tsv'
+    # runtag = 'run71' # v4cd8
+    # mode = 'paired_knns'
+    # num_nbrs = 501
+    # runtag = 'run70' # v4cd8
+    # mode = 'paired_ranges'
+    # radius = 120.5
+    # filtfile = '/home/pbradley/csdat/big_covid/round8_v3cd4_filt_tcrs.tsv'
+    # runtag = 'run68' # v3cd4
+    #filtfile = '/home/pbradley/csdat/big_covid/round8_v3cd8_filt_tcrs.tsv'
+    #runtag = 'run67' # v3cd8
+
+    # # KNN TCR neighbors to prep for hotspot analysis
+    # filtfile = '/home/pbradley/csdat/big_covid/round8_v3cd4_filt_tcrs.tsv'
+    # runtag = 'run66' # v3cd4
+    # # filtfile = '/home/pbradley/csdat/big_covid/round8_v3cd8_filt_tcrs.tsv'
+    # # runtag = 'run65' # v3cd8
+    # mode = 'paired_knns'
+    # num_nbrs = 501
+
+    # KNN TCR neighbors to prep for hotspot analysis
+    # filtfile = f'{DATADIR}phil/round8_merged_filt.tsv'
+    # mode = 'paired_knns'
+    # num_nbrs = 501
+    # runtag = 'run60' # redo with v3 fixed Terekhova; TCR KNN
+    # runtag = 'run58' # redo with fixed Terekhova; TCR KNN
+    #runtag = 'run57' # TCR KNN w/ round8_merged_filt.tsv
+
+    # # round8 for clumping
+    # mode = 'paired_ranges'
+    # radius = 96.5
+    # bigfile = '/home/pbradley/csdat/big_covid/big_combo_tcrs_2024-01-18.tsv'
+    # filtfile = f'{DATADIR}phil/big_combo_tcrs_2024-01-18_filt.tsv'
+    # runtag = 'run55'
+
+    # # round7 for clumping
+    # mode = 'paired_ranges'
+    # radius = 96.5
+    # bigfile = '/home/pbradley/csdat/big_covid/big_combo_tcrs_2023-12-17.tsv'
+    # filtfile = f'{DATADIR}phil/big_combo_tcrs_2023-12-17_filt.tsv'
+    # runtag = 'run53'
+
+
+    # #bigfile = '/home/pbradley/csdat/big_covid/big_combo_tcrs_2023-11-22.tsv'
+    # filtfile = f'{DATADIR}phil/round6_merged_filt.tsv'
+    # mode = 'paired_knns'
+    # num_nbrs = 501
+    # runtag = 'run50' # TCR KNN w/ round6_merged_filt.tsv
+
+
+    # mode = 'paired_ranges'
+    # radius = 96.5
+    # bigfile = '/home/pbradley/csdat/big_covid/big_combo_tcrs_2023-11-22.tsv'
+    # filtfile = f'{DATADIR}phil/big_combo_tcrs_2023-11-22_filt.tsv'
+    # runtag = 'run48'
+
+    # mode = 'paired_knns'
+    # num_nbrs = 501
+    # runtag = 'run38'
+    # filtfile = '/home/pbradley/csdat/big_covid/round4_v3c_filt_tcrs.tsv'
 
     # mode = 'paired_knns'
     # num_nbrs = 501
@@ -1103,7 +1520,6 @@ if 0: # setup for some range and knn searches
     #radius = 96.5
     #runtag = 'run22' # w/ round4_merged_filt.tsv
     #runtag = 'run20' # w/ paired_sample_filt.tsv
-    xargs = ' --sleeptime 30 '
 
     # bigfile = '/home/pbradley/csdat/big_covid/big_combo_tcrs_2023-03-07.tsv'
     # filtfile = f'{DATADIR}phil/paired_sample_filt.tsv'
@@ -1112,7 +1528,7 @@ if 0: # setup for some range and knn searches
     # filtfile = '/home/pbradley/csdat/big_covid/round4_v2_filt_tcrs.tsv'
 
     if not exists(filtfile):
-        assert False
+        #assert False
         print('reading:', bigfile)
         tcrs = pd.read_table(bigfile)
         print('read:', tcrs.shape[0], bigfile)
@@ -1135,8 +1551,18 @@ if 0: # setup for some range and knn searches
     out = open(cmds_file,'w')
 
     print('reading:', filtfile)
-    tcrs = pd.read_table(filtfile)
+    tcrs = pd.read_table(filtfile, low_memory=False)
     num_tcrs = tcrs.shape[0]
+
+    if 2: # sanity testing ##############
+        organism = 'human'
+        newtcrs = tcrs.copy()
+        newtcrs = filter_out_bad_genes_and_cdr3s(
+            newtcrs, 'va', 'cdr3a', organism, 'A', j_column='ja')
+        newtcrs = filter_out_bad_genes_and_cdr3s(
+            newtcrs, 'vb', 'cdr3b', organism, 'B', j_column='jb')
+        print('filtfile sanity check:', newtcrs.shape[0], tcrs.shape[0])
+        assert newtcrs.shape[0] == tcrs.shape[0]
 
     num_jobs = (num_tcrs-1)//job_size+1
 

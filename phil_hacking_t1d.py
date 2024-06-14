@@ -66,7 +66,24 @@ def parse_genes(vgene, jgene, expected_gene_names):
     return vg, jg
 
 
-if 1: # look for hla/t1d associations in cohort_1 hits
+if 0: # look at t1d associations of magic seq
+    meta = pd.read_csv('/fh/fast/bradley_p/t1d/cohort_1_metadata.csv')
+    meta.set_index('subject_id', drop=False, inplace=True)
+    hitlines = [x.split() for x in open('/fh/fast/bradley_p/t1d/tmp.cohort1_magic','r')]
+
+    counts = Counter()
+
+    for l in hitlines:
+        sid = '_'.join(l[0].split('/')[1].split('_')[:2])
+        row = meta.loc[sid]
+        counts[row.diabetes_status] += 1
+
+    print(counts.most_common())
+
+    exit()
+
+
+if 0: # look for hla/t1d associations in cohort_1 hits
     from scipy.stats import hypergeom
     if 0:
         tsvfile = '/home/pbradley/csdat/raptcr/slurm/run45_combo_pvals_evt_1.0.tsv'
