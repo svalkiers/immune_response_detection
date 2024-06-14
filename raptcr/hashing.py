@@ -181,7 +181,8 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         num_pos:int=16,
         n_trim:int=3,
         c_trim:int=2,
-        cdr3_weight:int=3,
+        cdr3_weight:Union[int,float]=3,
+        v_weight:Union[int,float]=1,
         organism:str='human',
         chain:str='B',
         full_tcr:bool=True
@@ -226,15 +227,16 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         self.n_trim = n_trim
         self.c_trim = c_trim
         self.cdr3_weight = cdr3_weight
+        self.v_weight = v_weight
         self.organism = organism
 
-        allowed_chains = ['a','b','alpha','beta']
-        assert chain.lower() in allowed_chains, f'Invalid chain {chain}, please select alpha or beta.'
+        allowed_chains = ['a','b','alpha','beta','ab','alphabeta','paired']
+        assert chain.lower() in allowed_chains, f'Invalid chain {chain}, please select alpha, beta or paired.'
         self.chain = chain
         
         self.full_tcr = full_tcr
         if self.full_tcr:
-            self.m = self.aa_dim*self.num_pos + self.aa_dim*18
+            self.m = self.aa_dim*self.num_pos + self.aa_dim*21
         else:
             self.m = self.aa_dim*self.num_pos 
 
@@ -319,7 +321,7 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         return self._encode_sequence(self._trim_and_gap_cdr3(cdr3))
     
     # @lru_cache(maxsize=None)
-    def _gapped_encode_tcr_chains(self, tcrs:pd.DataFrame) -> np.array:
+    def _gapped_encode_tcr_chains(self, tcrs) -> np.array:
         '''
         Convert a TCR (V gene + CDR3) of variable length to a fixed-length vector
         by trimming/gapping and then lining up the aa_vectors.
@@ -330,13 +332,19 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
             DataFrame with V and CDR3 information in the named columns.
         '''
         self.tcrs = tcrs
+        if isinstance(tcrs, pd.DataFrame):
+            tcrs = list(zip(tcrs["v_call"], tcrs["junction_aa"]))
+        else:
+            pass
         # !THE FOLLOWING V GENES CONTAIN '*' CHARACTER WHICH IS CAUSING ISSUES WITH THE ENCODING!
         # TRBV12-2*01 -----> FGH-NFFRS-*SIPDGSF
         # TRBV16*02 -------> KGH-S*FQN-ENVLPNSP
         to_remove = ['TRBV12-2*01','TRBV16*02']
-        if self.tcrs[self.tcrs.v_call.isin(to_remove)].shape[0] > 0:
-            print(f"WARNING: Removing TCRs with {to_remove}. This is a temporary measure to prevent KeyError caused by '*' character.\n")
-            self.tcrs = self.tcrs[~self.tcrs.v_call.isin(to_remove)]
+        n_pre = len(tcrs)
+        tcrs = [i for i in tcrs if i[0] not in tcrs]
+        n_post = len(tcrs)
+        if n_pre-n_post>0:
+            print(f"WARNING: Removed TCRs with {to_remove}. This is a temporary measure to prevent KeyError caused by '*' character.\n")
 
         vec_len = self.aa_dim * (self.num_pos_other_cdrs + self.num_pos)
         # Perhaps we should not print this message
@@ -348,12 +356,12 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         #     )
 
         vecs = []
-        for v, cdr3 in zip(self.tcrs['v_call'], self.tcrs['junction_aa']):
-            v_vec = self._encode_sequence(self.gene_cdr_strings[v])
+        for v, cdr3 in tcrs:
+            v_vec = np.sqrt(self.v_weight) * self._encode_sequence(self.gene_cdr_strings[v])
             cdr3_vec = np.sqrt(self.cdr3_weight) * self._gapped_encode_cdr3(cdr3)
             vecs.append(np.concatenate([v_vec, cdr3_vec]))
         vecs = np.array(vecs)
-        assert vecs.shape == (self.tcrs.shape[0], vec_len)
+        assert vecs.shape == (len(self.tcrs), vec_len)
         return vecs
 
     def encode_tcr(self, v, cdr3):
