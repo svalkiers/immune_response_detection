@@ -81,8 +81,21 @@ def format_chain(chain):
         'ab':'AB',
         'alphabeta':'AB',
         'alpha_beta':'AB',
-        'paired':'AB'
-        }
+        'g':'G',
+        'gamma':'G',
+        'trg':'G',
+        'trgamma':'G',
+        'tcrg':'G',
+        'tcrgamma':'G',
+        'tcr_gamma':'G',
+        'd':'D',
+        'delta':'D',
+        'trd':'D',
+        'trdelta':'D',
+        'tcrd':'D',
+        'tcrdelta':'D',
+        'tcr_delta':'D',
+    }
     assert chain.lower() in mapping, f"Unknown chain: {chain}. Please select A, B or AB."
     return mapping[chain.lower()]
 

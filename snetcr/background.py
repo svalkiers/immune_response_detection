@@ -326,7 +326,7 @@ class Background():
         # Combine reshuffled repertoires
         bg = pd.concat(backgrounds)
         bg.columns = [self.v_column, self.j_column, self.cdr3aa_column, self.cdr3nt_column]
-        # Optional: save to disk
+        # Option: save to disk
         if destination is not None:
             bg.to_csv(destination, sep="\t", index=False)
         return bg

@@ -1,32 +1,33 @@
 import pandas as pd
 import random
+from os.path import dirname, abspath, join
 
-FILENAME = './raptcr/datasets/big_background.tsv'
+DIR = dirname(abspath(__file__))
+vdjdb_location = join(DIR,'data/vdjdb/vdjdb.txt')
 
-def sample_cdr3s(s:int, background:str=FILENAME, aa_col:str='junction_aa') -> list:
-    '''
-    Randomly sample s number of cdr3s from the background distribution.
-    '''
-    n = sum(1 for line in open(FILENAME)) - 1 # number of records in file (excludes header)
-    skip = sorted(random.sample(range(1,n+1),n-s)) #the 0-indexed header will not be included in the skip list
-    return pd.read_csv(background, sep='\t', skiprows=skip)[aa_col].to_list()
+# def sample_cdr3s(s:int, background:str=FILENAME, aa_col:str='junction_aa') -> list:
+#     '''
+#     Randomly sample s number of cdr3s from the background distribution.
+#     '''
+#     n = sum(1 for line in open(FILENAME)) - 1 # number of records in file (excludes header)
+#     skip = sorted(random.sample(range(1,n+1),n-s)) #the 0-indexed header will not be included in the skip list
+#     return pd.read_csv(background, sep='\t', skiprows=skip)[aa_col].to_list()
 
-def sample_tcrs(s:int, background:str=FILENAME, cols:list=['junction_aa','v_call','j_call']):
-    n = sum(1 for line in open(FILENAME)) - 1 # number of records in file (excludes header)
-    skip = sorted(random.sample(range(1,n+1),n-s)) #the 0-indexed header will not be included in the skip list
-    return pd.read_csv(background, sep='\t', skiprows=skip)[cols]
+# def sample_tcrs(s:int, background:str=FILENAME, cols:list=['junction_aa','v_call','j_call']):
+#     n = sum(1 for line in open(FILENAME)) - 1 # number of records in file (excludes header)
+#     skip = sorted(random.sample(range(1,n+1),n-s)) #the 0-indexed header will not be included in the skip list
+#     return pd.read_csv(background, sep='\t', skiprows=skip)[cols]
 
-
-def load_yfv_responding():
-    responding = pd.read_csv("./analysis/background_testing/yfv/yfv_responding.txt", sep="\t")
-    responding = responding[["bestVGene","CDR3.amino.acid.sequence","donor"]].drop_duplicates()
-    responding.columns = ["v_gene","junction_aa","donor"]
-    responding["responding"] = True
-    return responding
+# def load_yfv_responding():
+#     responding = pd.read_csv("./analysis/background_testing/yfv/yfv_responding.txt", sep="\t")
+#     responding = responding[["bestVGene","CDR3.amino.acid.sequence","donor"]].drop_duplicates()
+#     responding.columns = ["v_gene","junction_aa","donor"]
+#     responding["responding"] = True
+#     return responding
 
 def load_vdjdb(chain="B", organism="human", exclude_10x=True, concise=True):
     
-    vdjdb = pd.read_csv("./snetcr/datasets/vdjdb/vdjdb.txt", sep="\t")
+    vdjdb = pd.read_csv(vdjdb_location, sep="\t")
     vdjdb.columns = [i.replace(".","_") for i in vdjdb.columns]
 
     ref_map = {

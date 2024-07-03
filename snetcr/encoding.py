@@ -75,8 +75,12 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         self.organism = organism
         self.ncpus = ncpus
 
-        allowed_chains = ['a','b','alpha','beta','ab','alphabeta','paired']
-        assert chain.lower() in allowed_chains, f'Invalid chain {chain}, please select alpha, beta or paired.'
+        allowed_chains = [
+            'a','b','g','d',
+            'alpha','beta','gamma','delta',
+            'ab','gd',
+            'alphabeta','gammadelta']
+        assert chain.lower() in allowed_chains, f'Invalid chain {chain}, please select alpha, beta, gamma, delta.'
         self.chain = chain
         self.full_tcr = full_tcr
 

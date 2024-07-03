@@ -1,13 +1,13 @@
 import os
 import numpy as np
 import pandas as pd
-import tcrdist_old
-
-from tcrdist_old.all_genes import all_genes # for recognized genes
-from tcrdist_old.translation import get_translation
-from tcrdist_old.tcr_sampler import get_j_cdr3_nucseq
 from statsmodels.stats.multitest import fdrcorrection
-from snetcr.constants.preprocessing import IMGT, adaptive_to_imgt_human, adaptive_vfam_mapping
+
+# from .constants.modules import tcrdist
+from .modules.tcrdist.all_genes import all_genes # for recognized genes
+from .modules.tcrdist.translation import get_translation
+from .modules.tcrdist.tcr_sampler import get_j_cdr3_nucseq
+from .preprocessing import IMGT, adaptive_to_imgt_human, adaptive_vfam_mapping
 
 aminoacids = 'ACDEFGHIKLMNPQRSTVWY'
 _aminoacids_set = set(aminoacids)
@@ -96,7 +96,7 @@ def check_formatting(data : pd.DataFrame, verbose=False):
     # Check if V/J genes are formatted correctly
     if verbose:
         print("Check V and J gene formatting")
-    functional = IMGT[IMGT['fct']=='F']
+    functional = IMGT[IMGT['fct'].isin(['F','(F)','[F]'])]
     v_check = data.v_call.isin(functional.imgt_allele_name).eq(True).all()
     j_check = data.v_call.isin(functional.imgt_allele_name).eq(True).all()
     assert v_check, "Column 'v_call' formatted improperly\n \

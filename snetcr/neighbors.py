@@ -200,14 +200,14 @@ def neighbor_dict_to_df(neighbor_dict):
     for i in neighbor_dict:
         n = neighbor_dict[i][0] # number of neighbors
         df = pd.DataFrame([tuple(j[x] for j in neighbor_dict[i][1:]) for x in range(n)])
-        df.columns = ["idx", "tcrdist", "target"]
-        df["source"] = "_".join(i) # source TCR
+        df.columns = ["idx", "tcrdist", "background"]
+        df["query"] = "_".join(i) # source TCR
         adj_list.append(df)
     # Concatenate all adjacency lists into one
     adj_list = pd.concat(adj_list)
     # Annotate V gene and CDR3
-    adj_list[["target_v_call", "target_junction_aa"]] = adj_list["target"].str.split("_", expand=True)
-    adj_list[["source_v_call", "source_junction_aa"]] = adj_list["source"].str.split("_", expand=True)
+    adj_list[["background_v_call", "background_junction_aa"]] = adj_list["background"].str.split("_", expand=True)
+    adj_list[["query_v_call", "query_junction_aa"]] = adj_list["query"].str.split("_", expand=True)
     
     return adj_list
 
@@ -278,7 +278,7 @@ class NeighborEnrichment():
             self.pseudocount = 0
 
 
-    def fixed_radius_neighbors(self, radius:Union[int,float]=12.5, k=None, n=None):
+    def fixed_radius_neighbors(self, radius:Union[int,float]=12.5):
         '''
         Find the number of neighbors within a repertoire of interest.
 
