@@ -95,6 +95,9 @@ def format_chain(chain):
         'tcrd':'D',
         'tcrdelta':'D',
         'tcr_delta':'D',
+        'gd':'GD',
+        'gammadelta':'GD',
+        'gamma_delta':'GD',
     }
     assert chain.lower() in mapping, f"Unknown chain: {chain}. Please select A, B or AB."
     return mapping[chain.lower()]
