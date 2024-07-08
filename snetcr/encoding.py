@@ -11,7 +11,9 @@ from .repertoire import Repertoire
 from .analysis import TcrCollection
 from .constants.base import AALPHABET, GAPCHAR
 from .constants.hashing import TCRDIST_DM
-from .constants.preprocessing import setup_gene_cdr_strings
+from .constants.preprocessing import (
+    setup_gene_cdr_strings, detect_vgene_col, detect_cdr3_col
+)
 
 from sklearn.utils.validation import check_is_fitted
 
@@ -21,8 +23,8 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         self,
         distance_matrix:np.array=TCRDIST_DM, 
         aa_dim:int=8,
-        # vgene_col='v_call',
-        # cdr3_col='junction_aa',
+        vgene_col=None,
+        cdr3_col=None,
         mds_eps:float=1e-05,
         num_pos:int=16,
         n_trim:int=3,
@@ -69,8 +71,8 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         """
         self.distance_matrix = distance_matrix
         self.aa_dim = aa_dim
-        # self.vgene_col = vgene_col
-        # self.cdr3_col = cdr3_col
+        self.vgene_col = vgene_col
+        self.cdr3_col = cdr3_col
         self.mds_eps = mds_eps
         self.num_pos = num_pos
         self.n_trim = n_trim
@@ -183,7 +185,7 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         return np.concatenate([v_vec, cdr3_vec])
     
     # @lru_cache(maxsize=None)
-    def _gapped_encode_tcr_chains(self, tcrs, vgene_col, cdr3_col) -> np.array:
+    def _gapped_encode_tcr_chains(self, tcrs, vgene_col=None, cdr3_col=None) -> np.array:
         '''
         Convert a TCR (V gene + CDR3) of variable length to a fixed-length vector
         by trimming/gapping and then lining up the aa_vectors.
@@ -195,6 +197,10 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         '''
         # Prepare data structure
         self.tcrs = tcrs
+        if vgene_col is None:
+            vgene_col = detect_vgene_col(tcrs)
+        if cdr3_col is None:
+            cdr3_col = detect_cdr3_col(tcrs)
         if isinstance(tcrs, pd.DataFrame):
             tcrs = list(zip(tcrs[vgene_col], tcrs[cdr3_col]))
         else:
@@ -256,12 +262,16 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         else:
             self.m = self.aa_dim*self.num_pos 
         return self
-    
 
-
-    def transform(self, X: Union[TcrCollection, pd.DataFrame, list, str], y=None) -> np.array:
+    def transform(
+            self, 
+            X: Union[TcrCollection, pd.DataFrame, list, str], 
+            split_ab=False,
+            vgene_col = 'v_call',
+            cdr3_col = 'junction_aa'
+            ) -> np.array:
         """
-        Generate CDR3 hashes.
+        Generate TCRdist vectors.
 
         Parameters
         ----------
@@ -279,22 +289,29 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
             return np.array([self.transform(s) for s in X]).astype(np.float32)
         elif isinstance(X, pd.DataFrame):
             if self.chain == 'AB':
-                # if already in paired format
-                if set(['va','vb','cdr3a','cdr3b']).issubset(X.columns):
-                    return self._encode_paired_chains(X)
-                # else tranform into paired format first
-                else:
+                # if not in paired format
+                if not set(['va','vb','cdr3a','cdr3b']).issubset(X.columns):
                     assert 'locus' in X.columns, f"DataFrame must include column named 'locus'."
                     rep = Repertoire(X)
                     X = rep.airr_to_tcrdist_paired()
+                # split up alpha and beta vecs
+                if split_ab:
+                    avecs = self._gapped_encode_tcr_chains(X, 'va', 'cdr3a')
+                    bvecs = self._gapped_encode_tcr_chains(X, 'vb', 'cdr3b')
+                    return avecs, bvecs
+                else:
                     return self._encode_paired_chains(X)
+
             if self.full_tcr:
-                assert 'v_call' in X.columns, f"DataFrame is missing 'v_call' column."
-                assert 'junction_aa' in X.columns, f"DataFrame is missing 'junction_aa' column."
-                return self._gapped_encode_tcr_chains(X,'v_call','junction_aa').astype(np.float32)
+                # assert 'v_call' in X.columns, f"DataFrame is missing 'v_call' column."
+                # assert 'junction_aa' in X.columns, f"DataFrame is missing 'junction_aa' column."
+                return self._gapped_encode_tcr_chains(X,self.vgene_col,self.cdr3_col).astype(np.float32)
             else:
                 assert 'junction_aa' in X.columns, f"DataFrame does not include column named 'junction_aa'."
                 X = X.junction_aa.to_list()
                 return np.array([self.transform(s) for s in X]).astype(np.float32)
         else:
             return self._gapped_encode_cdr3(X).astype(np.float32)
+        
+def join_ab_vecs(avecs,bvecs):
+    return np.hstack([avecs, bvecs])
