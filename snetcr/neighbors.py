@@ -13,7 +13,7 @@ from functools import reduce
 
 from .encoding import TCRDistEncoder
 from .indexing import IvfIndex, FlatIndex
-from .background import Background
+from .background import BackgroundModel
 from .constants.parsing import check_formatting
 
 def above_threshold(df, row, t):
@@ -412,7 +412,7 @@ class NeighborEnrichment():
         with open(file) as json_file:
             self.nbr_counts = json.load(json_file)
 
-    def dump_background_index_to_file(self, name):
+    def save_background_index_to_file(self, name):
         '''
         Write the contents of an index to disk. This function
         will create a new folder containing one binary file
@@ -422,7 +422,7 @@ class NeighborEnrichment():
         Parameters
         ----------
         name: str
-            Name of the folder to dump the files.
+            Name of the folder to save the files.
         '''
         assert self.bg_index is not None, "No background index found."
         os.mkdir(name)

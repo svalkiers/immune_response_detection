@@ -259,6 +259,8 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         assert all(len(x)==self.num_pos_other_cdrs for x in self.gene_cdr_strings.values())
         if self.full_tcr:
             self.m = self.aa_dim*self.num_pos + self.aa_dim*self.num_pos_other_cdrs
+            if self.chain == 'AB':
+                self.m *= 2
         else:
             self.m = self.aa_dim*self.num_pos 
         return self
@@ -296,8 +298,8 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
                     X = rep.airr_to_tcrdist_paired()
                 # split up alpha and beta vecs
                 if split_ab:
-                    avecs = self._gapped_encode_tcr_chains(X, 'va', 'cdr3a')
-                    bvecs = self._gapped_encode_tcr_chains(X, 'vb', 'cdr3b')
+                    avecs = self._gapped_encode_tcr_chains(X, 'va', 'cdr3a').astype(np.float32)
+                    bvecs = self._gapped_encode_tcr_chains(X, 'vb', 'cdr3b').astype(np.float32)
                     return avecs, bvecs
                 else:
                     return self._encode_paired_chains(X)
