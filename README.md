@@ -72,83 +72,91 @@ When analyzing **multiple files**, the `-f` or `--filename` should remain **unsp
 
 ### Advanced use (python interface)
 
-Alternatively, the python interface can be used, which allows for more flexibility.  Before trying to run the code, make sure your working directory is correctly configured:
+Alternatively, the python interface can be used, which allows for more flexibility and provides additional functionalities.  Before trying to run the code, make sure your working directory is correctly configured:
 
 ```
 import os
-os.chdir("/path_to_repository/") # Change me
+os.chdir(".../github/immune_response_detection/") # Change me
 ```
 
-The code block below shows the most basic example where we run the analysis for a single repertoire using a TCRdist radius of < 24.5.
+#### Calculating neighbor distributions
+
+The `find_neighbors` function provides a simple method for calculating the sequence neighbor distribution in your sample at a fixed TCRdist threshold *r*.
+
+``` python
+from snetcr.datasets import load_test
+
+tcrs = snetcr.load_test() # test data -> change to your own data here
+nbrs = find_neighbors(
+    tcrs = tcrs,
+    chain = 'AB',
+    radius = 96,
+)
+```
+
+#### Sequence neighbor enrichment
+
+To add some interpretation to the neighbor counts, you can perform a neighbor enrichment analysis. This will compare the neighbor distribution in the sample with a synthetic background sample to estimate the expected neighbor counts. The code block below shows the most basic example where we run the analysis for a single paired &alpha;&beta; chain repertoire using a TCRdist radius of < 96.
 
  ```python
- import pandas as pd
- from raptcr.neighbors import NeighborEnrichment
+ from snetcr.neighbors import neighbor_analysis
  
- foreground = pd.read_csv("./test_df.csv")
- enricher = NeighborEnrichment(repertoire=foreground)
- enricher.fixed_radius_neighbors(radius=24.5) # Determine neighbors in foreground
- result = enricher.compute_pvalues()
+ result = neighbor_analysis(
+     tcrs = tcrs,
+     chain = 'AB', # paired chain (alpha-beta)
+     organism = 'human',
+     radius = 96 # TCRdist distance radius
+ )
  ```
 
-#### Export a sparse matrix after computing vectorized TCRdist  
-
-The code block blow shows a basic example for those wanting 
-to implement a vectorized approximation of TCRdist, 
-where we find neighbors (TCRdist < r). Here 
-the distances can be converted to a sparse matrix
-and saved.
+After running the analysis, you can access the data in the `SneTcrResult` object. If you want to perform clustering on the enrichment results, you should run `.get_clusters()` before extracting the results.
 
 ```python
-import pandas as pd
-from scipy.sparse import csr_matrix, save_npz
-from raptcr.neighbors import NeighborEnrichment
-from raptcr.export import index_neighbors_manual
-from raptcr.export import range_search_to_csr_matrix
-foreground = pd.read_table('raptcr/datasets/1K_sequences.tsv')
-# add an allele for proper lookup of CDR1,CDR2,CDR2.5
-foreground['v_call'] = foreground['v_call'].apply(lambda x : f"{x}*01")
-foreground['j_call'] = foreground['j_call'].apply(lambda x : f"{x}*01")
-enricher = NeighborEnrichment(repertoire=foreground)
-enricher.fixed_radius_neighbors(radius=36.5) 
-lims, D, I  = index_neighbors_manual(query= enricher.repertoire, 
-                                     index=enricher.fg_index, 
-                                     r= enricher.r)
-csr_mat = range_search_to_csr_matrix(lims = lims, 
-                                     D = D, 
-                                     I = I)
-#<1000x1000 sparse matrix of type '<class 'numpy.int64'>'
-#        with 1036 stored elements in Compressed Sparse Row format>
-save_npz("sparse_matrix_filename.npz", csr_mat)
+res.get_clusters() # this will add a 'cluster' column to the results table
+clustered_results = res.to_df() # extracts the results table as a pandas.DataFrame
 ```
 
-#### Using a custom background
+#### Calculating the pairwise distance matrix using vectorized TCRdist 
+
+If you want to calculate the pairwise distances among a set of TCRs, you can simply run the example provided in this code block. This will produce a sparse distance matrix where zero-distances are encoded as -1. Here, *r* will determine the maximum distance that is included. Increasing *r* will slow down the computing time. Note that when *r* is very large, this may result in memory issues.
 
 ```python
-import pandas as pd
-from raptcr.neighbors import NeighborEnrichment
+from snetcr.distance import compute_sparse_distance_matrix
 
-background = pd.read_csv("./custom_background.csv")
-foreground = pd.read_csv("./test_df.csv")
-
-enricher = NeighborEnrichment(repertoire=foreground, background=background)
-enricher.fixed_radius_neighbors(radius=24.5) # Determine neighbors in foreground
-result = enricher.compute_pvalues()
+dm = compute_sparse_distance_matrix(
+    tcrs = tcrs,
+    chain = 'AB',
+    organism = 'human',
+    r = 96
+)
 ```
 
-#### Beyond the fixed radius
+#### Generating background data
 
-For a given TCR *T*, determine the number of neighbors *σ* at different radii *d*, and select the smallest radius for each sequence *argmin(d)* such that *σ(d,T) > t*. Here, *t* is a certain threshold for the minimum number of required neighbors (e.g. 5).
+The following functionality allows you to generate a set of background TCRs that match a range of characteristics in the provided data. These include matching **V** and **J** gene frequency, **CDR3 amino acid length** distribution, and the number of **n-inserted nucleotides** in the CDR3. The size of the background can be specified as a factor of the input data. By default, the model will generate a background dataset that is 10x the size of the input data.
 
 ```python
-import pandas as pd
-from raptcr.neighbors import NeighborEnrichment
+from snetcr.background import BackgroundModel
 
-background = pd.read_csv("./custom_background.csv")
-foreground = pd.read_csv("./test_df.csv")
+bgmodel = BackgroundModel(
+	repertoire = tcrs,
+	factor = 5 # relative to the size of the input data
+)
 
-enricher = NeighborEnrichment(repertoire=foreground, background=background)
-radii = [12.5,18.5,24.5,30.5,36.5]
-enricher.flexible_radius_neighbors(radii=radii, t=5)
-result = enricher.compute_pvalues()
+background = bgmodel.shuffle(chain='AB') # specify the chain here
 ```
+
+#### *vecTCRdist* (TCRdist-based TCR encoding)
+
+The TCRdist-based encoding *vecTCRdist* is a transformation of the TCRdist distance matrix, that enables accurate approximations of TCRdist distances in euclidean space. *vecTCRdist* captures information from CDR1, CDR2, CDR2.5, and CDR3.
+
+```python
+from snetcr.encoding import TCRDistEncoder
+
+encoder = TCRDistEncoder(
+    aa_dim = 8, # number of dimensions per amino acid
+    organism = 'human'
+    chain = 'AB'
+)
+```
+

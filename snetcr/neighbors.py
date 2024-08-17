@@ -16,6 +16,609 @@ from .indexing import IvfIndex, FlatIndex
 from .background import BackgroundModel
 from .constants.parsing import check_formatting
 
+import faiss
+import pandas as pd
+import numpy as np
+import networkx as nx
+import leidenalg as la
+import igraph as ig
+
+from scipy.spatial.distance import pdist, squareform
+from scipy.sparse import coo_matrix, lil_matrix, csr_matrix
+from scipy.stats import hypergeom
+from timeit import default_timer as timer
+from snetcr.encoding import TCRDistEncoder
+from snetcr.constants.preprocessing import format_chain
+from snetcr.indexing import FlatIndex, IvfIndex
+from snetcr.background import BackgroundModel
+from snetcr.repertoire import Repertoire
+
+class SneTcrResult:
+    '''
+    Class for storing the results of a neighborhood analysis.
+
+    Attributes:
+        data (pd.DataFrame): The data containing the results of the neighborhood analysis.
+        vecs (np.ndarray, optional): The vector encodings of the data. Defaults to None.
+
+    Methods:
+        __init__(self, sne, vecs=None): Initializes a SneTcrResult object.
+        __repr__(self): Returns a string representation of the SneTcrResult object.
+        __str__(self): Returns a string representation of the SneTcrResult object.
+        __len__(self): Returns the length of the SneTcrResult object.
+        __getitem__(self, n): Returns the n-th item of the SneTcrResult object.
+        to_df(self): Converts the SneTcrResult object to a pandas DataFrame.
+        get_vecs(self): Computes the vector encodings of the data.
+        get_clusters(self, r=96, chain='AB'): Gets the different SNE clusters.
+
+    '''
+
+    def __init__(
+            self, 
+            sne,
+            vecs=None
+            ) -> None:
+        '''
+        Initializes a SneTcrResult object.
+
+        Parameters:
+            sne (pd.DataFrame): The data containing the results of the neighborhood analysis.
+            vecs (np.ndarray, optional): The vector encodings of the data. Defaults to None.
+        '''
+        
+        self.data = sne
+        self.vecs = vecs
+
+    def __repr__(self) -> str:
+        '''
+        Returns a string representation of the SneTcrResult object.
+        '''
+        return f"SneTcrResult"
+    
+    def __str__(self) -> str:
+        '''
+        Returns a string representation of the SneTcrResult object.
+        '''
+        return f"SneTcrResult"
+
+    def __len__(self) -> int:
+        '''
+        Returns the length of the SneTcrResult object.
+        '''
+        return len(self.data)
+    
+    def __getitem__(self, n):
+        '''
+        Returns the n-th item of the SneTcrResult object.
+        '''
+        return self.data[n]
+    
+    def to_df(self) -> pd.DataFrame:
+        '''
+        Converts the SneTcrResult object to a pandas DataFrame.
+
+        Returns:
+            pd.DataFrame: The SneTcrResult object as a pandas DataFrame.
+        '''
+        return self.data
+    
+    def get_vecs(self):
+        '''
+        Computes the vector encodings of the data.
+        '''
+        encoder = TCRDistEncoder(aa_dim=16, chain='AB').fit()
+        self.vecs = encoder.transform(self.data)
+
+    def get_clusters(self, r=96, chain='AB'):
+        '''
+        Gets the different SNE clusters.
+        Builds a network from sequence neighbors (< r) and partitions
+        the graph using Leiden clustering.
+
+        Suggested thresholds for r:
+            - paired chain ('AB'): 96
+            - single chain ('A' or 'B'): 24
+
+        Parameters:
+            r (int): 96
+                Threshold for defining a neighbor.
+            chain (str): 'AB'
+                TCR chain.
+
+        Returns:
+            clusters (dict): Dictionary with cluster assignments per TCR. The keys correspond to the TCR indices in the neighbor analysis dataframe.
+
+        Also adds a cluster column to the dataframe.
+        '''
+        if self.vecs is None:
+            self.get_vecs()
+
+        dm = squareform(pdist(self.vecs, metric='euclidean')**2)
+        np.fill_diagonal(dm, -1)
+        ids = np.argwhere((dm <= r) & (dm >= 0))
+        
+        nodes = self.data['tcr_index'].values
+        edges = [(nodes[i[0]], nodes[i[1]]) for i in ids]
+        G = nx.Graph()
+        G.add_nodes_from(list(nodes))
+        G.add_edges_from(edges)
+
+        if isinstance(G, (nx.Graph, nx.DiGraph)):
+            G = ig.Graph.from_networkx(G)
+        partition = la.find_partition(G, la.ModularityVertexPartition)
+        cluster_lists = [[list(nodes)[node] for node in c] for c in list(partition)]
+        clusters = {int(j): n for n, i in enumerate(cluster_lists) for j in i}
+        self.data['cluster'] = self.data['tcr_index'].map(clusters)
+
+        return clusters
+
+def neighbor_analysis(tcrs, chain, organism, radius, vecs=None, background=None, encoder=None, fgindex=None, bgindex=None, depth=10):
+    '''
+    Perform a neighborhood analysis on a set of TCRs.
+
+    Suggestions for the choice of 'radius':
+        - single chain: 24.5
+        - paired chain: 96.5
+    '''
+
+    chain = format_chain(chain)
+
+    if len(chain) == 1:
+
+        if vecs is None:
+            if encoder is None:
+                encoder = TCRDistEncoder(aa_dim=8,organism=organism,chain=chain).fit()
+            vecs = encoder.transform(tcrs)
+
+        if fgindex is None:
+            fgindex = faiss.IndexFlatL2(vecs.shape[1])
+            fgindex.add(vecs)
+        
+        lims, D, I = fgindex.range_search(vecs, radius)
+        nbrcounts = neighbor_distr_from_lims(lims)
+        nonzero = np.where(nbrcounts > 0)[0]
+        del fgindex
+
+        if background is not None:
+            print('Background data provided, skipping background generation.')
+        else:
+            background = BackgroundModel(tcrs, 10)
+            bgdata = background.shuffle(chain=chain)
+        
+        bgvecs = encoder.transform(bgdata)
+
+        if bgindex is None:
+            bgindex = faiss.IndexFlatL2(vecs.shape[1])
+            bgindex.add(bgvecs)
+
+        lims, D, I = bgindex.range_search(vecs[nonzero], 12.5)
+        del bgindex
+
+        estimated = neighbor_distr_from_lims(lims)
+
+        presne = tcrs.loc[nonzero]
+        presne['foreground_neighbors'] = nbrcounts[nonzero]
+        presne['background_neighbors'] = estimated
+
+        sne = _hypergeometric(presne, tcrs.shape[0], bgdata.shape[0])
+
+    elif len(chain) > 1:
+
+        # Make sure the data is in the paired format
+        airr_cols = ['v_call','j_call','junction_aa','junction']
+        if all([i in tcrs.columns for i in airr_cols]):
+            rep = Repertoire(tcrs)
+            tcrs = rep.airr_to_tcrdist_paired()
+        else:
+            pass
+        
+        print('Encoding TCRs')
+        if vecs is None:
+            if encoder is None:
+                encoder = TCRDistEncoder(aa_dim=8,organism=organism,chain=chain).fit()
+            vecs = encoder.transform(tcrs)
+        
+        # Get the neighbor distribution in the sample
+        print(f'Computing neighbor distribution for {vecs.shape[0]} TCRs in sample.')
+        fg_results = get_foreground_nbr_counts(vecs, radius)
+
+        if background is None:
+            # Create a background data set
+            print(f'Creating background data set with {tcrs.shape[0]*depth} TCRs')
+            bgmodel = BackgroundModel(repertoire=tcrs)
+            background = bgmodel.shuffle(chain=chain)
+
+        # Get the encodings for both chains separately in foreground and background
+        print('Estimating expected neighbor distribution.')
+        avecs, bvecs = encoder.transform(tcrs, split_ab=True)
+        avecsbg, bvecsbg = encoder.transform(background, split_ab=True)
+        bg_ab_counts = get_background_nbr_counts(avecs,bvecs,avecsbg,bvecsbg,radius)
+
+        # Combine all results and compute the neighborhood p-values
+        sne = compute_neighborhood_pvalues(tcrs, fg_results, bg_ab_counts, background.shape[0])
+
+    return SneTcrResult(sne=sne)
+
+
+    
+def neighbor_distr_from_lims(lims):
+    '''
+    Extract the number of neighbors for each query from lims.
+    '''
+    num_queries = len(lims) - 1
+    result = np.zeros(num_queries, dtype=int)
+    for i in range(num_queries):
+        start = lims[i]
+        end = lims[i + 1]
+        result[i] = end - start
+    return result
+
+def convert_range_search_output(lims, D, I, offset=0):
+    '''
+    Convert the output of a range search to a list of tuples.
+    '''
+    # Calculate the number of queries
+    num_queries = len(lims) - 1
+    # Vectorize the construction of result pairs
+    result_indices = []
+    result_distances = []
+    for i in range(num_queries):
+        start = lims[i]
+        end = lims[i + 1]
+        query_indices = np.full(end - start, i)
+        neighbor_indices = I[start:end] + offset
+        distances = D[start:end]
+        result_indices.extend(zip(query_indices, neighbor_indices))
+        result_distances.extend(distances)
+    result = list(zip(result_indices, result_distances))
+    return result
+    
+def compute_sparse_distance_matrix(tcrs, chain, organism, exact=True, d=96.5, m=8):
+    '''
+    Compute the sparse distance matrix for a set of TCRs.
+    '''
+    # Encode the TCRs
+    t0 = timer()
+    start = timer()
+    encoder = TCRDistEncoder(aa_dim=m,organism=organism,chain=chain).fit()
+    vecs = encoder.transform(tcrs).astype(np.float32)
+    print(f'Encoding TCRs took {timer()-start:.2f}s')
+
+    if exact:
+        # Flat index will ensure 'exact' search
+        # However, this is still an approximation of the true TCRdist
+        start = timer()
+        index = FlatIndex(encoder=encoder)
+        index.add(tcrs, vecs)
+        print(f'Building the index took {timer()-start:.2f}s')
+    else:
+        # IVF index
+        start = timer()
+        k = round(len(vecs)/1000)
+        n = round(k/20)+2
+        if n > k:
+            n = k
+        index = IvfIndex(encoder=encoder, n_centroids=k, n_probe=n)
+        index.add(tcrs, vecs)
+        print(f'Building the index took {timer()-start:.2f}s')
+
+    # Search index
+    start = timer()
+    lims, D, I = index.idx.range_search(vecs, thresh=d)
+    print(f'Searching index within radius {d} took {timer()-start:.2f}s')
+
+    # Format the results.
+    start = timer() 
+    res = convert_range_search_output(lims, D, I)
+
+    # Determine the size of the matrix
+    max_index = len(tcrs)
+    base = [([i,i],0) for i in range(max_index)]
+    res += base
+    res = list(set((tuple(indices), distance-1) for indices, distance in res))
+
+    # Initialize lists to hold row indices, column indices, and data values
+    rows, cols, values = [], [], []
+
+    # Populate the lists with the given distances
+    for indices, distance in res:
+        i, j = indices
+        rows.append(i)
+        cols.append(j)
+        values.append(distance)
+        if i != j:  # Ensure the matrix is symmetric
+            rows.append(j)
+            cols.append(i)
+            values.append(distance)
+
+    # Convert the lists to a sparse matrix using coo_matrix
+    dm = coo_matrix((values, (rows, cols)), shape=(max_index, max_index), dtype=np.float64)
+    print(f'Building the sparse matrix took {timer()-start:.2f}s')
+    print(f'Total time to compute distance matrix: {timer()-t0:.2f}s')
+
+    return dm
+
+def find_neighbors(tcrs, chain, radius, organism='human', vecs=None, encoder:TCRDistEncoder=None, index=None):
+    '''
+    Suggested radii:
+        - single chain: 24.5
+        - paired chain: 96.5
+    '''
+
+    if vecs is None:
+        if encoder is None:
+            encoder = TCRDistEncoder(aa_dim=8,organism=organism,chain=chain).fit()
+        vecs = encoder.transform(tcrs)
+
+    if index is None:
+        index = faiss.IndexFlatL2(vecs.shape[1])
+        index.add(vecs)
+    
+    lims, D, I = index.range_search(vecs,radius)
+
+    return neighbor_distr_from_lims(lims)
+
+def _hypergeometric(
+        data,
+        fg_size,
+        bg_size,
+        pseudocount=0
+        ):
+    '''
+    Compute p-values for based on foreground and background neighbor counts
+    using the hypergeometric distribution.
+
+    NOTE:
+    SciPy's hypergeometric sf function uses the boost distribution implementation.
+    Integer values in the boost distribution use the C unsigned integer type, which for most
+    compilers is 32 bits. Any values exceedingn 32 bits will prompt either nan or strange
+    p-values.
+    '''
+
+    # Hypergeometric testing
+    N = fg_size - 1
+    M = bg_size + N
+    if M >= 2**32:
+        import warnings
+        warnings.warn(f"Population size exceeds {2**32-1} (32 bits).\n p-values may be miscalculated.")
+    data['pvalue'] = data.apply(
+        lambda x: hypergeom.sf(
+            x['foreground_neighbors']-1, 
+            M, 
+            x['foreground_neighbors'] + x['background_neighbors'] + pseudocount, 
+            N
+            ),
+        axis=1
+        )
+    data['evalue'] = data['pvalue'] * fg_size
+    
+    return data.sort_values(by='evalue')
+
+def get_foreground_nbr_counts(
+        fg_vecs,
+        radius=96.5,
+):
+    '''
+    Get the faiss data (lims,D,I) for range_search of tcrs against self
+
+    so it will include self-distances
+
+    tcrs and bg_tcrs should already have been filtered
+    '''
+    qvecs = fg_vecs # could optionally split into batches
+
+    print('start IndexFlatL2 range search', qvecs.shape, fg_vecs.shape)
+    start = timer()
+    idx = faiss.IndexFlatL2(fg_vecs.shape[1])
+    idx.add(fg_vecs)
+    print(type(qvecs), type(radius))
+    lims, D, I = idx.range_search(qvecs, radius)
+    print(f'IndexFlatL2 range search took {timer()-start:.2f}')
+    return {'lims':lims, 'D':D, 'I':I}
+
+def get_background_nbr_counts(
+        fg_avecs,
+        fg_bvecs,
+        bg_avecs,
+        bg_bvecs,
+        maxdist=96,
+):
+    ''' Compute the background paired tcrdist distribution by taking the
+    convolution of the alpha and beta single-chain tcrdist distributions.
+    The effective number of paired background comparisons is len(bg_tcrs)**2
+
+    returns an integer-valued numpy array of shape (num_fg_tcrs, maxdist+1)
+
+    histogram bin-size is 1.0
+
+    first bin is (-0.5, 0.5), last bin is (maxdist-0.5, maxdist+0.5)
+
+    tcrs and bg_tcrs should already have been filtered
+
+    (see phil_functions.compute_background_paired_tcrdist_distributions)
+    '''
+
+    start = timer()
+    ab_counts = compute_background_paired_tcrdist_distributions(
+        fg_avecs, fg_bvecs, bg_avecs, bg_bvecs, maxdist)
+    print(f'paired distribution calc took {timer()-start:.2f}')
+
+    return ab_counts
+
+def compute_background_single_tcrdist_distributions(
+        fg_vecs,
+        bg_vecs,
+        maxdist,
+        rowstep = 5000,
+        colstep = 50000,
+):
+    ''' Compute the histogram of distances to bg_vecs for each vector in fg_vecs
+
+    returns an integer-valued numpy array of shape (num_fg_tcrs, maxdist+1)
+
+    histogram bin-size is 1.0
+
+    first bin is (-0.5, 0.5), last bin is (maxdist-0.5, maxdist+0.5)
+
+    for alphabeta tcr clumping, I use maxdist=96
+    '''
+    dim = fg_vecs.shape[1]
+    assert dim == bg_vecs.shape[1]
+    num_fg = fg_vecs.shape[0]
+    num_bg = bg_vecs.shape[0]
+    maxdist = int(maxdist+0.1) # confirm int
+    print('compute_background_single_tcrdist_distributions: '
+          f'dim= {dim} maxdist= {maxdist}')
+    #maxdist_float = maxdist + 0.5
+    dist_counts = np.zeros((num_fg, maxdist+1), dtype=int)
+
+    nrows = (num_fg-1)//rowstep + 1
+    ncols = (num_bg-1)//colstep + 1
+
+    # initialize distance storage
+    dists = np.zeros((rowstep*colstep,), dtype=np.float32) # 1D array
+
+    start0 = timer()
+    for ii in range(nrows):
+        ii_start = ii*rowstep
+        for jj in range(ncols):
+            jj_start = jj*colstep
+            xq = fg_vecs[ii_start:ii_start+rowstep] # faiss terminology here
+            xb = bg_vecs[jj_start:jj_start+colstep]
+            nq = xq.shape[0] # Num Query
+            nb = xb.shape[0] # Num dataBase (?)
+
+            start = timer()
+            faiss.pairwise_L2sqr(dim, nq, faiss.swig_ptr(xq), nb, faiss.swig_ptr(xb),
+                                 faiss.swig_ptr(dists))
+            disttime = timer()-start
+            #print(disttime)
+            start += disttime
+
+            # now fill counts
+            for iq in range(nq):
+                dist_counts[ii_start+iq,:] += np.histogram(
+                    dists[iq*nb:(iq+1)*nb], bins = maxdist+1,
+                    range = (-0.5, maxdist+0.5))[0]
+
+            counttime = timer()-start
+
+            #print(f'ij {ii} {jj} {disttime:.2f} {counttime:.2f} {timer()-start0:.2f}')
+
+    return dist_counts
+
+
+
+def compute_background_paired_tcrdist_distributions(
+        fg_avecs,
+        fg_bvecs,
+        bg_avecs,
+        bg_bvecs,
+        maxdist,
+        rowstep = 5000,
+        colstep = 50000,
+):
+    ''' Compute the background paired tcrdist distribution by taking the
+    convolution of the alpha and beta single-chain tcrdist distributions
+
+    returns an integer-valued numpy array of shape (num_fg_tcrs, maxdist+1)
+
+    histogram bin-size is 1.0
+
+    first bin is (-0.5, 0.5), last bin is (maxdist-0.5, maxdist+0.5)
+    '''
+
+    num_fg_tcrs = fg_avecs.shape[0]
+    num_bg_tcrs = bg_avecs.shape[0]
+    assert num_fg_tcrs == fg_bvecs.shape[0]
+    assert num_bg_tcrs == bg_bvecs.shape[0]
+
+    acounts = compute_background_single_tcrdist_distributions(
+        fg_avecs, bg_avecs, maxdist, rowstep=rowstep, colstep=colstep)
+
+    bcounts = compute_background_single_tcrdist_distributions(
+        fg_bvecs, bg_bvecs, maxdist, rowstep=rowstep, colstep=colstep)
+
+    abcounts = np.zeros((num_fg_tcrs, int(maxdist+1)), dtype=int)
+
+    assert acounts.shape == bcounts.shape == abcounts.shape
+
+    for d in range(int(maxdist+1)):
+        for adist in range(d+1):
+            abcounts[:,d] += acounts[:,adist] * bcounts[:,d-adist]
+
+    return abcounts
+
+def compute_neighborhood_pvalues(
+        tcrs,
+        fg_results,
+        bg_ab_counts,
+        num_bg_tcrs,
+        radii = [24, 48, 72, 96],
+        min_nbrs = 2, # tcr_clumping uses 1?
+        pseudocount = 0.25,
+        evalue_threshold = 1,
+):
+    ''' Compute pvalues and simple-bonferroni corrected "evalues"
+    for observed foreground neighbor numbers
+
+    Right now this is using poisson but we could shift to hypergeometric
+    I think for the paired setting where the effective number of background comparisons
+    is very large the two should give pretty similar results
+    '''
+    from scipy.stats import poisson
+
+    # get background counts at radii
+    maxdist = max(radii)
+    assert bg_ab_counts.shape[1] == maxdist+1
+    bg_counts = np.cumsum(bg_ab_counts, axis=1)[:, radii]
+
+    # get foreground counts at radii
+    num_fg_tcrs = tcrs.shape[0]
+    lims = fg_results['lims']
+    D = fg_results['D']
+    assert num_fg_tcrs == lims.shape[0]-1
+    fg_counts = np.zeros((num_fg_tcrs, len(radii)), dtype=int)
+    for ii, r in enumerate(radii):
+        fg_counts[:,ii] = np.add.reduceat((D<=r+.5), lims[:-1].astype(int))
+
+    fg_counts -= 1 # exclude self nbrs
+
+    assert fg_counts.shape == bg_counts.shape == (num_fg_tcrs, len(radii))
+
+    # "rates" are the expected number of neighbors based on the background counts
+    # we divide background counts by num_bg_tcrs**2 (since that's the effective number
+    # of background paired comparisons) to get the probability of seeing a neighbor
+    # at a given radius, then we multiply by num_fg_tcrs to get the expected number
+    # of neighbors.
+    # rates.shape: (num_fg_tcrs, len(radii))
+    #
+    rates = (np.maximum(bg_counts, pseudocount) *
+             (num_fg_tcrs/(num_bg_tcrs*num_bg_tcrs)))
+
+    dfl = []
+    for ii, (counts,rates) in enumerate(zip(fg_counts, rates)):
+        for jj, (count,rate) in enumerate(zip(counts,rates)):
+            if count >= min_nbrs:
+                pvalue = poisson.sf(count-1, rate)
+                evalue = pvalue*(len(radii)*num_fg_tcrs)
+                if evalue <= evalue_threshold:
+                    dfl.append(dict(
+                        pvalue=pvalue,
+                        evalue=evalue,
+                        tcr_index=ii,
+                        radius=radii[jj],
+                        num_nbrs=count,
+                        expected_num_nbrs=rate,
+                        bg_nbrs=rate*num_bg_tcrs*num_bg_tcrs/num_fg_tcrs,
+                    ))
+
+    results = pd.DataFrame(dfl)
+    if results.shape[0]:
+        results = results.join(tcrs, on='tcr_index').sort_values('evalue')
+
+    return results
+
 def above_threshold(df, row, t):
     for column in df.columns:
         if row[column] > t:
@@ -150,7 +753,7 @@ def neighbor_retrieval(query, encoder=None, background=None, index_type="exact",
     print("searching for neighbors")
     lims, D, I = index.idx.range_search(query_vecs.astype(np.float32), thresh=d)
     # Build the neighbor dictionary
-    print("Combinding results")
+    print("Combining results")
     neighbor_dict = {}
     for n, i in enumerate(query.iterrows()):
         nneigh = lims[n+1]-lims[n]
@@ -211,6 +814,10 @@ def neighbor_dict_to_df(neighbor_dict):
     
     return adj_list
 
+
+
+
+# LEGACY
 class NeighborEnrichment():
     def __init__(
         self,

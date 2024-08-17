@@ -109,9 +109,9 @@ class BackgroundModel():
         self.j_column = j_column
         self.cdr3nt_column = cdr3nt_column
         self.cdr3aa_column = cdr3aa_column
-        self._add_v_gene_column()
-        self._add_j_gene_column()
-        self.v_genes = self.repertoire.v_gene.unique()
+        # self._add_v_gene_column()
+        # self._add_j_gene_column()
+        # self.v_genes = self.repertoire.v_gene.unique()
 
         self.verbose = verbose
 
@@ -161,7 +161,11 @@ class BackgroundModel():
             self.cdr3aa_column, 
             self.cdr3nt_column
             ]
-        self.repertoire[self.cdr3nt_column] = self.repertoire[self.cdr3nt_column].str.lower()
+        if 'junction' in self.repertoire.columns:
+            self.repertoire[self.cdr3nt_column] = self.repertoire[self.cdr3nt_column].str.lower()
+        else:
+            self.repertoire['cdr3a_nucseq'] = self.repertoire.cdr3a_nucseq.str.lower()
+            self.repertoire['cdr3b_nucseq'] = self.repertoire.cdr3b_nucseq.str.lower()
         if chain in ['A','G']:
             print(chain)
             ag = self.repertoire[self.repertoire['locus'] == f'TR{chain}']
@@ -176,10 +180,18 @@ class BackgroundModel():
             tcr_tuples = zip(itertools.repeat(None), tcr_tuples)
         elif chain in ['AB','GD']:
             print(chain)
-            ag = self.repertoire[self.repertoire['locus'] == f'TR{list(chain)[0]}']
-            ag = ag[tcr_columns]
-            bd = self.repertoire[self.repertoire['locus'] == f'TR{list(chain)[1]}']
-            bd = bd[tcr_columns]
+            # Check formatting
+            airr_cols = ['v_call','j_call','junction_aa','junction']
+            if all([i in self.repertoire.columns for i in airr_cols]):
+                print('Detected AIRR format')
+                ag = self.repertoire[self.repertoire['locus'] == f'TR{list(chain)[0]}']
+                ag = ag[tcr_columns]
+                bd = self.repertoire[self.repertoire['locus'] == f'TR{list(chain)[1]}']
+                bd = bd[tcr_columns]
+            else:
+                print('No AIRR format detected, proceeding with paired TCRdist format.')
+                ag = self.repertoire[['va','ja','cdr3a','cdr3a_nucseq']]
+                bd = self.repertoire[['vb','jb','cdr3b','cdr3b_nucseq']]
             tcr_tuples_ag = ag.itertuples(name=None, index=None)
             tcr_tuples_bd = bd.itertuples(name=None, index=None)
             tcr_tuples = zip(tcr_tuples_ag, tcr_tuples_bd)

@@ -14,6 +14,26 @@ from .constants.preprocessing import detect_vgene_col, detect_cdr3_col
 
 from timeit import default_timer as timer
 
+def convert_range_search_output(lims, D, I, offset=0):
+    '''
+    Convert the output of a range search to a list of tuples.
+    '''
+    # Calculate the number of queries
+    num_queries = len(lims) - 1
+    # Vectorize the construction of result pairs
+    result_indices = []
+    result_distances = []
+    for i in range(num_queries):
+        start = lims[i]
+        end = lims[i + 1]
+        query_indices = np.full(end - start, i)
+        neighbor_indices = I[start:end] + offset
+        distances = D[start:end]
+        result_indices.extend(zip(query_indices, neighbor_indices))
+        result_distances.extend(distances)
+    result = list(zip(result_indices, result_distances))
+    return result
+
 
 class BaseIndex(ABC):
     """
@@ -287,7 +307,7 @@ class BaseApproximateIndex(BaseIndex):
     @n_probe.setter
     def n_probe(self, n: int):
         ivf = faiss.extract_index_ivf(self.idx)
-        ivf.nprobe = n
+        ivf.nprobe = n 
 
 
 class IvfIndex(BaseApproximateIndex):
