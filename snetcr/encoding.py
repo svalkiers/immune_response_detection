@@ -234,8 +234,8 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
             vecs = np.array(pool.map(self._gapped_encoder_v_cdr3, tcrs))
             pool.close()
             pool.join()
-        print(len(self.tcrs), vec_len)
-        print(vecs.shape)
+        # print(len(self.tcrs), vec_len)
+        print('Shape of TCR vecs', vecs.shape)
         assert vecs.shape == (len(self.tcrs), vec_len)
         return vecs
 

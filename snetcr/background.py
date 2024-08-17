@@ -168,15 +168,23 @@ class BackgroundModel():
             self.repertoire['cdr3b_nucseq'] = self.repertoire.cdr3b_nucseq.str.lower()
         if chain in ['A','G']:
             print(chain)
-            ag = self.repertoire[self.repertoire['locus'] == f'TR{chain}']
-            ag = ag[tcr_columns]
-            tcr_tuples = ag.itertuples(name=None, index=None)
+            if self.repertoire.v_call.apply(lambda x: x[:3]).nunique() > 1:
+                ag = self.repertoire[self.repertoire['locus'] == f'TR{chain}']
+                ag = ag[tcr_columns]
+                tcr_tuples = ag.itertuples(name=None, index=None)
+            else:
+                print('Single chain detected.')
+                tcr_tuples = self.repertoire[tcr_columns].itertuples(name=None, index=None)
             tcr_tuples = zip(tcr_tuples, itertools.repeat(None))
         elif chain in ['B','D']:
             print(chain)
-            bd = self.repertoire[self.repertoire['locus'] == f'TR{chain}']
-            bd = bd[tcr_columns]
-            tcr_tuples = bd.itertuples(name=None, index=None)
+            if self.repertoire.v_call.apply(lambda x: x[:3]).nunique() > 1:
+                bd = self.repertoire[self.repertoire['locus'] == f'TR{chain}']
+                bd = bd[tcr_columns]
+                tcr_tuples = bd.itertuples(name=None, index=None)
+            else:
+                print('Single chain detected.')
+                tcr_tuples = self.repertoire[tcr_columns].itertuples(name=None, index=None)
             tcr_tuples = zip(itertools.repeat(None), tcr_tuples)
         elif chain in ['AB','GD']:
             print(chain)

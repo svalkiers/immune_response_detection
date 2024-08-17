@@ -56,6 +56,7 @@ class SneTcrResult:
     def __init__(
             self, 
             sne,
+            chain='AB',
             vecs=None
             ) -> None:
         '''
@@ -67,6 +68,7 @@ class SneTcrResult:
         '''
         
         self.data = sne.reset_index(drop=True)
+        self.chain = chain
         self.vecs = vecs
 
     def __repr__(self) -> str:
@@ -106,10 +108,10 @@ class SneTcrResult:
         '''
         Computes the vector encodings of the data.
         '''
-        encoder = TCRDistEncoder(aa_dim=16, chain='AB').fit()
+        encoder = TCRDistEncoder(aa_dim=16, chain=self.chain).fit()
         self.vecs = encoder.transform(self.data)
 
-    def get_clusters(self, r=96, chain='AB'):
+    def get_clusters(self, r=96):
         '''
         Gets the different SNE clusters.
         Builds a network from sequence neighbors (< r) and partitions
@@ -152,13 +154,41 @@ class SneTcrResult:
 
         return clusters
 
-def neighbor_analysis(tcrs, chain, organism, radius, vecs=None, background=None, encoder=None, fgindex=None, bgindex=None, depth=10):
+def neighbor_analysis(tcrs, chain: str, organism: str, radius: Union[float,int], vecs=None, background=None, encoder=None, fgindex=None, bgindex=None, depth: int=10):
     '''
-    Perform a neighborhood analysis on a set of TCRs.
+    Perform a neighborhood analysis on a set of TCRs. TCR neighborhood analysis compares the
+    distribution of sequence neighbors within a fixed distance radius against a background dataset.
+    Neighborhood enrichment is determined by comparing the neighbor count of a TCR in the sample
+    compared to the neighbor count of the same TCR in the background dataset.
 
     Suggestions for the choice of 'radius':
-        - single chain: 24.5
+        - single chain: 12.5 (strict), 24.5 (flexible)
         - paired chain: 96.5
+
+    Parameters:
+        tcrs
+            The input data provided as a pandas.DataFrame.
+        chain (str): 'AB'
+            TCR chain.
+        organism (str): human
+            Species from which the data originates.
+        radius (float or int)
+             Threshold for defining a neighbor.
+        vecs: None
+            Pre-computed vecTCRdist encodings.
+        background: None
+            Custom background.
+        encoder : None
+            Custom encoder. Accepts TCRDistEncoder only.
+        fgindex: None
+            Custom index for foreground TCRs.
+        bgindex: None
+            Custom index for background TCRs.
+        depth (int): 10
+            Depth of the background data set. This is a factor of the size of the input data.
+
+    Returns:
+        SneTcrResult
     '''
 
     chain = format_chain(chain)
@@ -168,8 +198,10 @@ def neighbor_analysis(tcrs, chain, organism, radius, vecs=None, background=None,
         if vecs is None:
             if encoder is None:
                 encoder = TCRDistEncoder(aa_dim=8,organism=organism,chain=chain).fit()
+            print('Encoding TCRs.')
             vecs = encoder.transform(tcrs)
 
+        print('Computing neighbor distribution.')
         if fgindex is None:
             fgindex = faiss.IndexFlatL2(vecs.shape[1])
             fgindex.add(vecs)
@@ -237,10 +269,8 @@ def neighbor_analysis(tcrs, chain, organism, radius, vecs=None, background=None,
         # Combine all results and compute the neighborhood p-values
         sne = compute_neighborhood_pvalues(tcrs, fg_results, bg_ab_counts, background.shape[0])
 
-    return SneTcrResult(sne=sne)
+    return SneTcrResult(sne=sne, chain=chain)
 
-
-    
 def neighbor_distr_from_lims(lims):
     '''
     Extract the number of neighbors for each query from lims.
