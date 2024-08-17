@@ -35,8 +35,7 @@ To run the code in this repository, use the following instructions:
 By far the easiest way to run the analysis is through the using of the command line interface, provided through the  `run_pipeline.py` script.
 
 ```
-usage: run_pipeline.py [-h] [-f FILENAME] [-d DIRECTORY] [-r RADIUS] [-q RATIO] [-s SUFFIX] -o OUTDIR [--custom_background CUSTOM_BACKGROUND] [--custom_index CUSTOM_INDEX]
-                       [--downsample DOWNSAMPLE]
+usage: run_pipeline.py [-h] [-f FILENAME] [-d DIRECTORY] [-r RADIUS] [-q RATIO] [-c CHAIN] [-s SPECIES] [-x SUFFIX] -o OUTDIR [--custom_background CUSTOM_BACKGROUND] [--downsample DOWNSAMPLE]
 
 optional arguments:
   -h, --help            show this help message and exit
@@ -62,8 +61,8 @@ optional arguments:
 
 **Example:**
 
-```
-python3 run_pipeline.py --filename ./data/example_repertoire.tsv --radius 12.5 --ratio 10 --suffix result --outdir /path_to_folder/output/
+```bash
+python3 run_pipeline.py --filename ./data/test.tsv --chain AB --organism human --radius 96 --ratio 10 --suffix result --outdir ./testresult/
 ```
 
 **Note:**

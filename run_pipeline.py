@@ -4,10 +4,7 @@ import numpy as np
 
 from os import path, mkdir, getcwd, listdir
 from typing import Union
-from raptcr.neighbors import NeighborEnrichment
-
-import pandas as pd
-import numpy as np
+from snetcr.neighbors import neighbor_analysis
 
 def parse_separator(filename):
     if filename.split(".")[-1] == "tsv":
@@ -21,10 +18,12 @@ def analyze_file(
     filename,
     ratio=10,
     radius=12.5,
+    chain="B",
+    organism="human",
     suffix="",
     outdir=None,
     custom_background:Union[str,pd.DataFrame]=None,
-    custom_index=None,
+    # custom_index=None,
     downsample=None
     ):
 
@@ -83,19 +82,28 @@ def analyze_file(
     else:
         background = None
     
-    enricher = NeighborEnrichment(
-        repertoire=df,
-        background=background
-        )
-    
-    if custom_index is not None:
-        print("Loading user-provided background index")
-        enricher.load_background_index_from_file(custom_index)
-        ratio = enricher.bg_index.idx.ntotal / df.shape[0]
+    res = neighbor_analysis(
+        tcrs = df,
+        chain = chain,
+        organism = organism,
+        radius = radius,
+        background = background,
+        depth = ratio
+    )
 
-    print("Computing neighbors in foreground...")
-    enricher.fixed_radius_neighbors(radius=radius)
-    pvals = enricher.compute_pvalues(ratio=ratio)
+    # enricher = NeighborEnrichment(
+    #     repertoire=df,
+    #     background=background
+    #     )
+    
+    # if custom_index is not None:
+    #     print("Loading user-provided background index")
+    #     enricher.load_background_index_from_file(custom_index)
+    #     ratio = enricher.bg_index.idx.ntotal / df.shape[0]
+
+    # print("Computing neighbors in foreground...")
+    # enricher.fixed_radius_neighbors(radius=radius)
+    # pvals = enricher.compute_pvalues(ratio=ratio)
 
     base = path.basename(filename)
     file_out = base.split('.')[0] + f'_{suffix}.tsv'
@@ -108,14 +116,16 @@ def analyze_file(
         pass
 
     path_out = path.join(outdir,file_out)
-    pvals.to_csv(path_out, sep="\t", index=False)
+    res.to_df().to_csv(path_out, sep="\t", index=False)
 
-    return pvals
+    return res.to_df()
 
 def analyze_directory(
     indir,
     ratio=10,
     radius=12.5,
+    chain='B',
+    organism='human',
     suffix:str="",
     outdir:str=None,
     custom_background:str=None,
@@ -141,19 +151,53 @@ def analyze_directory(
             for f in files:
                 fname = path.join(indir,f)
                 prefix = f.split(".")[0]
-                analyze_file(fname, custom_background=backgrounds[prefix], outdir=outdir, suffix=suffix)
+                analyze_file(
+                    filename=fname,
+                    ratio=ratio,
+                    radius=radius,
+                    chain=chain,
+                    organism=organism,
+                    suffix=suffix,
+                    outdir=outdir,
+                    custom_background=backgrounds[prefix],
+                    # custom_index=None,
+                    downsample=None
+                    )
+                
         elif path.isfile(custom_background):
             background = custom_background
             for f in files:
                 fname = path.join(indir,f)
                 prefix = f.split(".")[0]
-                analyze_file(fname, custom_background=background, outdir=outdir, suffix=suffix)
+                analyze_file(
+                    filename=fname,
+                    ratio=ratio,
+                    radius=radius,
+                    chain=chain,
+                    organism=organism,
+                    suffix=suffix,
+                    outdir=outdir,
+                    custom_background=background,
+                    # custom_index=None,
+                    downsample=None
+                    )
     else:
         for f in files:
             fname = path.join(indir,f)
             prefix = f.split(".")[0]
             print(fname)
-            analyze_file(fname, outdir=outdir, suffix=suffix)
+            analyze_file(
+                filename=fname,
+                ratio=ratio,
+                radius=radius,
+                chain=chain,
+                organism=organism,
+                suffix=suffix,
+                outdir=outdir,
+                custom_background=custom_background,
+                # custom_index=None,
+                downsample=None
+                )
     
     return None
 
@@ -165,11 +209,13 @@ parser.add_argument('-d', '--directory', type=str, default=None, help="Path to t
 parser.add_argument('-r', '--radius', default=12.5, help="The radius for defining neighbors. Default is 12.5.")
 parser.add_argument('-q', '--ratio', type=int, default=10, help="The ratio between background and foreground. \
     Only applicable when no custom background is provided. Default is 10.")
-parser.add_argument('-s', '--suffix', type=str, default="", help="A suffix to add to the output file name.")
+parser.add_argument('-c', '--chain', type=str, default="B", help="TCR chain. AB for alphabeta. Default is B.")
+parser.add_argument('-s', '--species', type=str, default="human", help="Species. Default is human.")
+parser.add_argument('-x', '--suffix', type=str, default="", help="A suffix to add to the output file name.")
 parser.add_argument('-o', '--outdir', type=str, required=True, help="Path to directory where results will be saved. \
     If directory is non-existent, a new one will be created.")
-parser.add_argument('--custom_background', default=None, help="The path to a custom background index file. ")
-parser.add_argument('--custom_index', default=None, help="The path to a custom background file.")
+parser.add_argument('--custom_background', default=None, help="The path to a custom background file. ")
+# parser.add_argument('--custom_index', default=None, help="The path to a custom background index file.")
 parser.add_argument('--downsample', type=int, default=None, help="The number of sequences to downsample from the input file. \
     Default is None.")
 args = parser.parse_args()
@@ -182,10 +228,12 @@ if args.filename is not None:
         filename=args.filename,
         ratio=ratio,
         radius=radius,
+        chain=args.chain,
+        organism=args.species,
         suffix=args.suffix,
         outdir=args.outdir,
         custom_background=args.custom_background,
-        custom_index=args.custom_index,
+        # custom_index=args.custom_index,
         downsample=args.downsample
         )
 
@@ -194,6 +242,8 @@ elif args.directory is not None:
         indir=args.directory,
         ratio=ratio,
         radius=radius,
+        chain=args.chain,
+        organism=args.species,
         suffix=args.suffix,
         outdir=args.outdir,
         custom_background=args.custom_background,
