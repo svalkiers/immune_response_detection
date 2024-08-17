@@ -66,7 +66,7 @@ class SneTcrResult:
             vecs (np.ndarray, optional): The vector encodings of the data. Defaults to None.
         '''
         
-        self.data = sne
+        self.data = sne.reset_index(drop=True)
         self.vecs = vecs
 
     def __repr__(self) -> str:
@@ -137,7 +137,7 @@ class SneTcrResult:
         np.fill_diagonal(dm, -1)
         ids = np.argwhere((dm <= r) & (dm >= 0))
         
-        nodes = self.data['tcr_index'].values
+        nodes = self.data.index.values
         edges = [(nodes[i[0]], nodes[i[1]]) for i in ids]
         G = nx.Graph()
         G.add_nodes_from(list(nodes))
@@ -148,7 +148,7 @@ class SneTcrResult:
         partition = la.find_partition(G, la.ModularityVertexPartition)
         cluster_lists = [[list(nodes)[node] for node in c] for c in list(partition)]
         clusters = {int(j): n for n, i in enumerate(cluster_lists) for j in i}
-        self.data['cluster'] = self.data['tcr_index'].map(clusters)
+        self.data['cluster'] = self.data.index.map(clusters)
 
         return clusters
 
