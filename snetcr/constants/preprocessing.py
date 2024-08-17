@@ -95,6 +95,9 @@ def format_chain(chain):
         'tcrd':'D',
         'tcrdelta':'D',
         'tcr_delta':'D',
+        'gd':'GD',
+        'gammadelta':'GD',
+        'gamma_delta':'GD',
     }
     assert chain.lower() in mapping, f"Unknown chain: {chain}. Please select A, B or AB."
     return mapping[chain.lower()]
@@ -130,3 +133,25 @@ def setup_gene_cdr_strings(organism:str='human', chain:str='B'):
         for g, cdr in zip(vgenes, cdrs):
             gene_cdr_strings[g] += cdr
     return gene_cdr_strings
+
+def detect_vgene_col(df):
+    pattern = r'TR[A,B,G,D]V'
+    matching_columns = [column for column in df.columns if df[column].astype(str).str.contains(pattern, regex=True).all()]
+    if len(matching_columns) == 1:
+        print("Autodetected V gene column:", matching_columns[0])
+        return matching_columns[0]
+    elif len(matching_columns) == 0:
+        raise ValueError("No V gene column detected. If your dataframe contains V gene information, please make sure it is IMGT-formatted.")
+    else:
+        raise ValueError("Multiple V gene columns detected. Please specify the correct column name.")
+
+def detect_cdr3_col(df):
+    pattern = r'^C.*[FWC]$'
+    matching_columns = [column for column in df.columns if df[column].astype(str).str.contains(pattern, regex=True).all()]
+    if len(matching_columns) == 1:
+        print("Autodetected CDR3AA column:", matching_columns[0])
+        return matching_columns[0]
+    elif len(matching_columns) == 0:
+        raise ValueError("No CDR3 column detected. Please make sure your dataframe contains a column with CDR3 sequences or specify the column name.")
+    else:
+        raise ValueError("Multiple CDR3 columns detected. Please specify the correct column name.")

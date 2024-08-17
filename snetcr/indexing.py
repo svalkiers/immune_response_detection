@@ -2,15 +2,37 @@ from abc import ABC
 from functools import partial
 from typing import List, Tuple, Callable, Union
 
+import os
 import faiss
-from pynndescent import NNDescent
+# from pynndescent import NNDescent
 import numpy as np
 import pandas as pd
 
 from .encoding import TCRDistEncoder
 from .analysis import TcrCollection
+from .constants.preprocessing import detect_vgene_col, detect_cdr3_col
 
 from timeit import default_timer as timer
+
+def convert_range_search_output(lims, D, I, offset=0):
+    '''
+    Convert the output of a range search to a list of tuples.
+    '''
+    # Calculate the number of queries
+    num_queries = len(lims) - 1
+    # Vectorize the construction of result pairs
+    result_indices = []
+    result_distances = []
+    for i in range(num_queries):
+        start = lims[i]
+        end = lims[i + 1]
+        query_indices = np.full(end - start, i)
+        neighbor_indices = I[start:end] + offset
+        distances = D[start:end]
+        result_indices.extend(zip(query_indices, neighbor_indices))
+        result_distances.extend(distances)
+    result = list(zip(result_indices, result_distances))
+    return result
 
 
 class BaseIndex(ABC):
@@ -21,7 +43,10 @@ class BaseIndex(ABC):
         - radius search: returns all TCRs within a radius r of the query
     """
 
-    def __init__(self, idx: faiss.Index, encoder: TCRDistEncoder) -> None:
+    def __init__(
+            self, idx: faiss.Index, 
+            encoder: TCRDistEncoder,
+            ) -> None:
         super().__init__()
         self.idx = idx
         self.encoder = encoder
@@ -37,9 +62,21 @@ class BaseIndex(ABC):
         if isinstance(self.encoder, TCRDistEncoder):
             if isinstance(X, pd.DataFrame):
                 if self.encoder.full_tcr:
-                    for x in self.encoder.tcrs.iterrows():
-                        self.ids[self.n] = x[1]['v_call'] + "_" + x[1]['junction_aa']
-                        self.n += 1
+                    for _, x in X.iterrows():
+                        if self.encoder.chain == 'AB':
+                            self.ids[self.n] = x['va'] + "_" + x['cdr3a'] + "_" + x['vb'] + "_" + x['cdr3b']
+                            self.n += 1                            
+                        else:
+                            if self.encoder.vgene_col is None:
+                                vgene_col = detect_vgene_col(X)
+                            else:
+                                vgene_col = self.encoder.vgene_col
+                            if self.encoder.cdr3_col is None:
+                                cdr3_col = detect_cdr3_col(X)
+                            else:
+                                cdr3_col = self.encoder.cdr3_col
+                            self.ids[self.n] = x[vgene_col] + "_" + x[cdr3_col]
+                            self.n += 1
             else:
                 for x in X:
                     self.ids[self.n] = x
@@ -49,23 +86,29 @@ class BaseIndex(ABC):
                 self.ids[self.n] = x
                 self.n += 1
 
-    def add(self, X: TcrCollection):
+    def add(self, tcrs: TcrCollection, vecs:np.ndarray=None):
         """
         Add sequences to the index.
 
         Parameters
         ----------
-        X : TcrCollection
+        tcrs : TcrCollection
             Collection of TCRs to add. Can be a Repertoire, list of Clusters, or
             list of str.
+        vecs : np.ndarray, optional
+            Precomputed vectors for the TCRs. If not passed, the encoder will
+            be used to compute the vectors.
         """
-        if isinstance(X, pd.DataFrame):
+        if isinstance(tcrs, pd.DataFrame):
             if not self.encoder.full_tcr:
                 import warnings
                 warnings.warn(f"Provided DataFrame but 'full_tcr' was set to {self.encoder.full_tcr} --> only using CDR3 sequences to create embedding.")
-        hashes = self.encoder.transform(X).astype(np.float32)
-        self._add_hashes(hashes)
-        self._add_ids(X)
+        # If vecs are not passed, encode the TCRs
+        if vecs is None:
+            vecs = self.encoder.transform(tcrs).astype(np.float32)
+        # Add the vecs and TCR ids to the index
+        self._add_hashes(vecs)
+        self._add_ids(tcrs)
         return self
 
     def _assert_trained(self):
@@ -108,6 +151,10 @@ class BaseIndex(ABC):
             return [(self.ids[i],d) for (i,d) in zip(I,D) if d > 0]
         else:
             return [(self.ids[i],d) for (i,d) in zip(I,D)]
+        
+    def search(self, vecs, r:float):
+        lims, D, I = self._within_radius(x=vecs, r=r)
+        return lims, D, I
 
     def radius_search(self, query:Union[str,list,pd.DataFrame], r:float, exclude_self=True):
         """
@@ -128,21 +175,6 @@ class BaseIndex(ABC):
         q = self.encoder.transform(query).astype(np.float32)
         lims, D, I = self._within_radius(x=q, r=r)
         return self._report_radius(I, D, exclude_self=exclude_self)
-
-    def radius_search_list(self, query, r):
-
-            
-            # nbr_df = pd.DataFrame({'target':nbrs,'distance':dist}).sort_values(by='distance')
-            # nbr_df['source'] = clone_id
-            # result.append(nbr_df)
-
-        # col_order = ['source', 'target', 'distance']
-        # result = pd.concat(result)
-        # result = result[col_order]
-        # Remove any self-sequences that are identical to the query sequence
-        # if exclude_self:
-            # return result[result.distance > 0]
-        return result
 
     def array_search(self, query:pd.DataFrame, r:Union[float,int], exclude_self=False):
         xq = self.encoder.transform(query).astype(np.float32)
@@ -170,8 +202,7 @@ class BaseIndex(ABC):
             return result[result.distance > 0]
         return result
 
-
-    def dump_as_json(self, name):
+    def save(self, filepath):
         '''
         Write the contents of an index to disk. This function
         will create a new folder containing one binary file
@@ -181,15 +212,17 @@ class BaseIndex(ABC):
         Parameters
         ----------
         name: str
-            Name of the folder to dump the files.
+            Name of the folder to save the files.
         '''
-        # assert self.bg_index is not None, "No background index found."
-        # os.mkdir(name)
-        json_string = json.dumps(self.idx.ids)
-        faiss.write_index(self.bg_index.idx, os.path.join(name,'index.bin'))
-        f = open(os.path.join(name,f'{name}.json'),"w")
-        f.write(json_string)
-        f.close()
+        assert self.n > 0, "Index is empty."
+        faiss.write_index(self.idx, os.path.join(filepath))
+
+    def load(self, filepath):
+        '''
+        Load an index from disk.
+        '''
+        self.idx = faiss.read_index(filepath)
+
 
 class FlatIndex(BaseIndex):
     """
@@ -274,7 +307,7 @@ class BaseApproximateIndex(BaseIndex):
     @n_probe.setter
     def n_probe(self, n: int):
         ivf = faiss.extract_index_ivf(self.idx)
-        ivf.nprobe = n
+        ivf.nprobe = n 
 
 
 class IvfIndex(BaseApproximateIndex):

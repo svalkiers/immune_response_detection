@@ -1,13 +1,20 @@
 import numpy as np
 import pandas as pd
 import itertools
+
 from concurrent.futures import ThreadPoolExecutor   
 from os.path import dirname, abspath, join
 from collections import Counter
-from .constants.modules.tcrdist.tcr_sampler import parse_tcr_junctions, resample_shuffled_tcr_chains
+
+from .constants.modules.tcrdist.tcr_sampler import parse_tcr_junctions,  resample_shuffled_tcr_chains
+from .constants.preprocessing import format_chain
+from .constants.base import AALPHABET
+from .pgen import generate_sequences
+
 
 ROOT = dirname(dirname(dirname(abspath(__file__))))
 MODELS = join(ROOT,'immune_response_detection/snetcr/constants/modules/olga/default_models/human_T_beta/')
+DATADIR = join(ROOT, 'immune_response_detection/snetcr/constants/data/')
 
 def get_vfam(df, vcol='v_call'):
     '''
@@ -21,12 +28,62 @@ def get_jfam(df, jcol='j_call'):
     '''
     return df[jcol].apply(lambda x: x.split('*')[0].split('-')[0])
 
-class Background():
+def filter_out_bad_genes_and_cdr3s(
+        df,
+        v_column,
+        cdr3_column,
+        organism,
+        chain,
+        min_cdr3_len = 6,
+        j_column=None,
+):
+    ''' returns filtered copy of df
+
+    removes tcrs with
+
+    * unrecognized V gene names (and J genes, if j_column != None)
+    * V genes whos cdr1/cdr2/cdr2.5 contain '*' (probably pseudogenes?)
+    * CDR3s with non-AA characters or shorter than 6
+    '''
+    all_genes_df = pd.read_table(DATADIR+'combo_xcr.tsv')
+    all_genes_df = all_genes_df[(all_genes_df.organism==organism)&
+                                (all_genes_df.chain==chain)]
+    # drop cdr3, since a '*' there might be trimmed back so it's OK...
+    all_genes_df['cdrs'] = all_genes_df.cdrs.str.split(';').str.slice(0,3).str.join(';')
+
+    known_v_genes = set(all_genes_df[all_genes_df.region=='V'].id)
+    bad_v_genes = set(x.id for x in all_genes_df.itertuples()
+                      if x.region == 'V' and '*' in x.cdrs)
+    print('bad_v_genes:', len(bad_v_genes), bad_v_genes)
+
+    good_cdr3s_mask = np.array(
+        [len(cdr3)>=min_cdr3_len and all(aa in AALPHABET for aa in cdr3)
+         for cdr3 in df[cdr3_column]])
+    print('bad_cdr3s in df:', (~good_cdr3s_mask).sum())
+
+    bad_v_genes_mask = df[v_column].isin(bad_v_genes)
+    print('bad_v_genes in df:', bad_v_genes_mask.sum(),
+          df[bad_v_genes_mask][v_column].unique())
+
+    unknown_genes_mask = ~df[v_column].isin(known_v_genes)
+    print('unknown_genes in df:', unknown_genes_mask.sum(),
+          df[unknown_genes_mask][v_column].unique())
+    if j_column is not None:
+        known_j_genes = set(all_genes_df[all_genes_df.region=='J'].id)
+        unknown_j_genes_mask = ~df[j_column].isin(known_j_genes)
+        print('unknown_j_genes in df:', unknown_j_genes_mask.sum(),
+              df[unknown_j_genes_mask][j_column].unique())
+        unknown_genes_mask |= unknown_j_genes_mask
+
+
+    return df[good_cdr3s_mask & (~bad_v_genes_mask) & (~unknown_genes_mask)].copy()
+
+class BackgroundModel():
     def __init__(
         self,
         repertoire,
         factor:int=10,
-        chain:str="B",
+        # chain:str="B",
         organism:str='human',
         v_column:str='v_call',
         j_column:str='j_call',
@@ -40,7 +97,7 @@ class Background():
         '''
         self.repertoire = repertoire
         self.factor = factor
-        self.chain = chain
+        # self.chain = format_chain(chain)
         self.organism = organism
         self.junctions = None
         self.size = len(self.repertoire)
@@ -52,9 +109,9 @@ class Background():
         self.j_column = j_column
         self.cdr3nt_column = cdr3nt_column
         self.cdr3aa_column = cdr3aa_column
-        self._add_v_gene_column()
-        self._add_j_gene_column()
-        self.v_genes = self.repertoire.v_gene.unique()
+        # self._add_v_gene_column()
+        # self._add_j_gene_column()
+        # self.v_genes = self.repertoire.v_gene.unique()
 
         self.verbose = verbose
 
@@ -87,13 +144,15 @@ class Background():
         self.j_allele_ref = dict(zip(func_j_genes.allele, func_j_genes.index))
 
 
-    def _parse_junctions(self):
+    def _parse_junctions(self, chain):
         '''
         setup for the "resample_background_tcrs" function by parsing
         the V(D)J junctions in the foreground tcr set
 
         returns a dataframe with info
         '''
+
+        chain = format_chain(chain)
 
         # tcrdist parsing function expects paired tcrs as list of tuples of tuples
         tcr_columns = [
@@ -102,12 +161,40 @@ class Background():
             self.cdr3aa_column, 
             self.cdr3nt_column
             ]
-        self.repertoire[self.cdr3nt_column] = self.repertoire[self.cdr3nt_column].str.lower()
-        tcr_tuples = self.repertoire[tcr_columns].itertuples(name=None, index=None)
-        if self.chain == 'A':
-            tcr_tuples = zip(tcr_tuples, itertools.repeat(None))
+        if 'junction' in self.repertoire.columns:
+            self.repertoire[self.cdr3nt_column] = self.repertoire[self.cdr3nt_column].str.lower()
         else:
+            self.repertoire['cdr3a_nucseq'] = self.repertoire.cdr3a_nucseq.str.lower()
+            self.repertoire['cdr3b_nucseq'] = self.repertoire.cdr3b_nucseq.str.lower()
+        if chain in ['A','G']:
+            print(chain)
+            ag = self.repertoire[self.repertoire['locus'] == f'TR{chain}']
+            ag = ag[tcr_columns]
+            tcr_tuples = ag.itertuples(name=None, index=None)
+            tcr_tuples = zip(tcr_tuples, itertools.repeat(None))
+        elif chain in ['B','D']:
+            print(chain)
+            bd = self.repertoire[self.repertoire['locus'] == f'TR{chain}']
+            bd = bd[tcr_columns]
+            tcr_tuples = bd.itertuples(name=None, index=None)
             tcr_tuples = zip(itertools.repeat(None), tcr_tuples)
+        elif chain in ['AB','GD']:
+            print(chain)
+            # Check formatting
+            airr_cols = ['v_call','j_call','junction_aa','junction']
+            if all([i in self.repertoire.columns for i in airr_cols]):
+                print('Detected AIRR format')
+                ag = self.repertoire[self.repertoire['locus'] == f'TR{list(chain)[0]}']
+                ag = ag[tcr_columns]
+                bd = self.repertoire[self.repertoire['locus'] == f'TR{list(chain)[1]}']
+                bd = bd[tcr_columns]
+            else:
+                print('No AIRR format detected, proceeding with paired TCRdist format.')
+                ag = self.repertoire[['va','ja','cdr3a','cdr3a_nucseq']]
+                bd = self.repertoire[['vb','jb','cdr3b','cdr3b_nucseq']]
+            tcr_tuples_ag = ag.itertuples(name=None, index=None)
+            tcr_tuples_bd = bd.itertuples(name=None, index=None)
+            tcr_tuples = zip(tcr_tuples_ag, tcr_tuples_bd)
 
         self.junctions = parse_tcr_junctions(self.organism, list(tcr_tuples))
         #junctions = add_vdj_splits_info_to_junctions(junctions)
@@ -115,6 +202,7 @@ class Background():
 
     def resample_background_tcrs(
         self,
+        chain,
         preserve_vj_pairings=False, # consider setting True for alpha chain
         return_nucseq_srcs=False, # for debugging
         verbose=False
@@ -129,17 +217,19 @@ class Background():
         returns a list of tuples [(v,j,cdr3aa,cdr3nt), ...] of length = junctions.shape[0]
         '''
 
+        chain = format_chain(chain)
+
         if self.junctions is None:
             self._parse_junctions()
 
         multiplier = 3 # so we have enough to match distributions
         bg_tcr_tuples, src_junction_indices = resample_shuffled_tcr_chains(
-            self.organism, multiplier * self.junctions.shape[0], self.chain, self.junctions,
+            self.organism, multiplier * self.junctions.shape[0], chain, self.junctions,
             preserve_vj_pairings=preserve_vj_pairings,
             return_src_junction_indices=True
             )
 
-        fg_nucseq_srcs = list(self.junctions[f'cdr3{self.chain.lower()}_nucseq_src'])
+        fg_nucseq_srcs = list(self.junctions[f'cdr3{chain.lower()}_nucseq_src'])
 
         resamples = []
         for tcr, inds in zip(bg_tcr_tuples, src_junction_indices):
@@ -156,7 +246,7 @@ class Background():
 
 
         # try to match lengths first
-        fg_lencounts = Counter(len(x) for x in self.junctions['cdr3'+self.chain.lower()])
+        fg_lencounts = Counter(len(x) for x in self.junctions['cdr3'+chain.lower()])
 
         N = self.junctions.shape[0]
         good_resamples = resamples[:N]
@@ -214,7 +304,7 @@ class Background():
         fg_ncounts = Counter(x.count('N') for x in fg_nucseq_srcs)
         bg_ncounts = Counter(x[4].count('N') for x in good_resamples)
 
-        if self.chain == 'B':
+        if chain == 'B':
             desirable_Ncounts = [0,1]
         else:
             desirable_Ncounts = [x for x in range(10)
@@ -306,48 +396,140 @@ class Background():
         else:
             return good_tcrs
 
-    def process_background(self) -> pd.DataFrame:
-        return pd.DataFrame(self.resample_background_tcrs())
+    def process_background(self, chain) -> pd.DataFrame:
+        return pd.DataFrame(self.resample_background_tcrs(chain=chain))
+    
 
-    def shuffled_background(self, num_workers=1, destination=None):
-        '''
-        Creates a background repertoire by reshuffling the input repertoire
-        n times (n = factor).
+    def shuffle(self, chain):
+        """
+        Shuffles T-cell receptor (TCR) sequences for a specified chain or pair of chains.
 
-        num_workers: number of CPUs allocated
-        '''
-        # If num_workers > 1, use multiprocessing
-        if num_workers > 1:
-            import multiprocessing as mp 
-            with mp.Pool(processes=num_workers) as pool:
-                backgrounds = pool.starmap(self.process_background, [() for _ in range(self.factor)])
-        else:
-            backgrounds = [self.process_background() for i in range(self.factor)]
-        # Combine reshuffled repertoires
-        bg = pd.concat(backgrounds)
-        bg.columns = [self.v_column, self.j_column, self.cdr3aa_column, self.cdr3nt_column]
-        # Option: save to disk
-        if destination is not None:
-            bg.to_csv(destination, sep="\t", index=False)
-        return bg
+        This function generates a background dataset of TCR sequences by resampling and shuffling existing sequences.
+        It supports shuffling for individual chains ('A', 'B', 'G', 'D') or a pair of chains ('AB', 'GD').
+        For individual chains, it parses junctions and processes the background for the specified chain.
+        For the 'AB' pair, it resamples background TCRs for both chains while preserving V-J pairings (alpha),
+        and filters out sequences with bad genes or CDR3 regions.
 
-    def batch_shuffling(self, destination):
-        '''
-        Performs background shuffling in batches and iteratively stores
-        output on disk. 
-        '''
-        for i in range(self.factor):
-            background = self.process_background()
-            if i == 0:
-                background.columns = [self.v_column, self.j_column, self.cdr3aa_column, self.cdr3nt_column]
-                background.to_csv(destination, sep="\t", index=False)
-            else:
-                background.to_csv(destination, sep="\t", mode="a", index=False, header=False)
+        Parameters:
+        - chain (str): The TCR locus to shuffle. Accepted values are 'A', 'B', 'G' or 'D' for single chains,
+         and 'AB' or 'GD' for paired chains.
 
-    # TO BE IMPLEMENTED:
-    # random background generation using OLGA 
-    # to generate a synthetic background repertoire
-    def random_background(self):
-        print("...Under development...")
-        nsample = self.size * self.factor
-        return None
+        Returns:
+        - pd.DataFrame: A DataFrame containing the shuffled TCR sequences. The columns of the DataFrame
+        depend on the input chain(s). For individual chains, the columns are V gene, J gene, CDR3 amino acid sequence,
+        and CDR3 nucleotide sequence. For 'AB' pairs, the columns include these for both chains A and B.
+        """
+
+        if chain in ['A','B','G','D']:
+            self._parse_junctions(chain=chain)
+            background = [self.process_background(chain=chain) for i in range(self.factor)]
+            background = pd.concat(background)
+            background.columns = [self.v_column, self.j_column, self.cdr3aa_column, self.cdr3nt_column]
+            return background
+
+        chain = format_chain(chain)
+        if chain == 'AB':
+            self._parse_junctions(chain=chain)
+            dfl = []
+            for r in range(self.factor):
+                # Get alpha and beta background
+                tups_a = self.resample_background_tcrs(chain='A',preserve_vj_pairings=True)
+                tups_b = self.resample_background_tcrs(chain='B')
+                bg_tcrs = pd.DataFrame([
+                    dict(va=va, ja=ja, cdr3a=cdr3a, cdr3a_nucseq=cdr3a_nucseq,
+                        vb=vb, jb=jb, cdr3b=cdr3b, cdr3b_nucseq=cdr3b_nucseq)
+                        for ((va,ja,cdr3a,cdr3a_nucseq), (vb,jb,cdr3b,cdr3b_nucseq)) in zip(tups_a, tups_b)
+                        ])
+                # Remove any TCRs with bad (ORF, pseudo) genes or non-AA characters in CDR3
+                bg_tcrs = filter_out_bad_genes_and_cdr3s(
+                    bg_tcrs, 'va', 'cdr3a', 'human', 'A', j_column='ja')
+                bg_tcrs = filter_out_bad_genes_and_cdr3s(
+                    bg_tcrs, 'vb', 'cdr3b', 'human', 'B', j_column='jb')
+                dfl.append(bg_tcrs)
+            return pd.concat(dfl).reset_index(drop=True)
+
+    def olga(self, chain):
+        '''
+        Generates a background repertoire using the OLGA model.
+        Currently only supports alpha-beta TCRs since there is
+        no OLGA model for gamma-delta TCRs.
+        '''
+        # Standardize chain selection format
+        chain = format_chain(chain)
+        # Single chain
+        if chain in ['A','B']:
+            nsample = self.repertoire[self.repertoire['locus']==f'TR{chain}'].shape[0] * self.factor
+            return generate_sequences(nsample, chain=chain)
+        # Paired chains
+        elif chain == 'AB':
+            nsample = self.repertoire[self.repertoire['locus']==f'TRA'].shape[0] * self.factor
+            alpha = generate_sequences(nsample, chain='A')
+            alpha = alpha[['junction','junction_aa','v_call','j_call']]
+            alpha.columns = ['cdr3a_nucseq','cdr3a','va','ja']
+            beta = generate_sequences(nsample, chain='B')
+            beta = beta[['junction','junction_aa','v_call','j_call']]
+            beta.columns = ['cdr3b_nucseq','cdr3b','vb','jb']
+            paired = pd.concat([alpha,beta],axis=1)
+            paired = paired[['va', 'ja', 'cdr3a', 'cdr3a_nucseq', 'vb', 'jb', 'cdr3b','cdr3b_nucseq']]
+            return paired
+
+
+    # def test_background(self):
+
+    #     if self.chain in ['A','B','G','D']:
+    #         return [self.process_background() for i in range(self.factor)]
+    #     else:
+    #         if chain == 'AB':
+    #             a = 'A'
+    #             b = 'B'
+    #         print(a,b)
+    #         dfl = []
+    #         for r in range(self.factor):
+    #             tups_a = self.resample_background_tcrs(chain='A')
+    #             tups_b = self.resample_background_tcrs(chain='B')
+    #             bg_tcrs = pd.DataFrame([
+    #                 dict(va=va, ja=ja, cdr3a=cdr3a, cdr3a_nucseq=cdr3a_nucseq,
+    #                     vb=vb, jb=jb, cdr3b=cdr3b, cdr3b_nucseq=cdr3b_nucseq)
+    #                     for ((va,ja,cdr3a,cdr3a_nucseq), (vb,jb,cdr3b,cdr3b_nucseq)) in zip(tups_a, tups_b)
+    #                     ])
+    #             bg_tcrs = filter_out_bad_genes_and_cdr3s(
+    #                 bg_tcrs, 'va', 'cdr3a', 'human', 'A', j_column='ja')
+    #             bg_tcrs = filter_out_bad_genes_and_cdr3s(
+    #                 bg_tcrs, 'vb', 'cdr3b', 'human', 'B', j_column='jb')
+    #             dfl.append(bg_tcrs)
+    #         return pd.concat(dfl).reset_index(drop=True)
+
+    # def shuffled_background(self, num_workers=1, destination=None):
+    #     '''
+    #     Creates a background repertoire by reshuffling the input repertoire
+    #     n times (n = factor).
+
+    #     num_workers: number of CPUs allocated
+    #     '''
+    #     # If num_workers > 1, use multiprocessing
+    #     if num_workers > 1:
+    #         import multiprocessing as mp 
+    #         with mp.Pool(processes=num_workers) as pool:
+    #             backgrounds = pool.starmap(self.process_background, [() for _ in range(self.factor)])
+    #     else:
+    #         backgrounds = [self.process_background() for i in range(self.factor)]
+    #     # Combine reshuffled repertoires
+    #     bg = pd.concat(backgrounds)
+    #     bg.columns = [self.v_column, self.j_column, self.cdr3aa_column, self.cdr3nt_column]
+    #     # Option: save to disk
+    #     if destination is not None:
+    #         bg.to_csv(destination, sep="\t", index=False)
+    #     return bg
+
+    # def batch_shuffling(self, destination):
+    #     '''
+    #     Performs background shuffling in batches and iteratively stores
+    #     output on disk. 
+    #     '''
+    #     for i in range(self.factor):
+    #         background = self.process_background()
+    #         if i == 0:
+    #             background.columns = [self.v_column, self.j_column, self.cdr3aa_column, self.cdr3nt_column]
+    #             background.to_csv(destination, sep="\t", index=False)
+    #         else:
+    #             background.to_csv(destination, sep="\t", mode="a", index=False, header=False)
