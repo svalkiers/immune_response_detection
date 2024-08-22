@@ -146,7 +146,7 @@ def detect_vgene_col(df):
         raise ValueError("Multiple V gene columns detected. Please specify the correct column name.")
 
 def detect_cdr3_col(df):
-    pattern = r'^C.*[FWC]$'
+    pattern = r'^[CW].*[FWC]$'
     matching_columns = [column for column in df.columns if df[column].astype(str).str.contains(pattern, regex=True).all()]
     if len(matching_columns) == 1:
         print("Autodetected CDR3AA column:", matching_columns[0])

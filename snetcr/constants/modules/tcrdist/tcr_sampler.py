@@ -591,7 +591,7 @@ def resample_shuffled_tcr_chains(
 
     if preserve_vj_pairings:
         # setup a mapping from v/j genes to junctions
-        print('create gene --> junctions mapping')
+        print('create gene --> junctions mapping')  
         v_gene2junctions, j_gene2junctions = {}, {}
         def trim_allele(g):
             return g[:g.index('*')]

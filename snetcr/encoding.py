@@ -290,24 +290,24 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         if isinstance(X, (list, np.ndarray)):
             return np.array([self.transform(s) for s in X]).astype(np.float32)
         elif isinstance(X, pd.DataFrame):
-            if self.chain == 'AB':
-                # if not in paired format
-                if not set(['va','vb','cdr3a','cdr3b']).issubset(X.columns):
-                    assert 'locus' in X.columns, f"DataFrame must include column named 'locus'."
-                    rep = Repertoire(X)
-                    X = rep.airr_to_tcrdist_paired()
-                # split up alpha and beta vecs
-                if split_ab:
-                    avecs = self._gapped_encode_tcr_chains(X, 'va', 'cdr3a').astype(np.float32)
-                    bvecs = self._gapped_encode_tcr_chains(X, 'vb', 'cdr3b').astype(np.float32)
-                    return avecs, bvecs
-                else:
-                    return self._encode_paired_chains(X)
-
             if self.full_tcr:
-                # assert 'v_call' in X.columns, f"DataFrame is missing 'v_call' column."
-                # assert 'junction_aa' in X.columns, f"DataFrame is missing 'junction_aa' column."
-                return self._gapped_encode_tcr_chains(X,self.vgene_col,self.cdr3_col).astype(np.float32)
+                if self.chain == 'AB':
+                    # if not in paired format
+                    if not set(['va','vb','cdr3a','cdr3b']).issubset(X.columns):
+                        assert 'locus' in X.columns, f"DataFrame must include column named 'locus'."
+                        rep = Repertoire(X)
+                        X = rep.airr_to_tcrdist_paired()
+                    # split up alpha and beta vecs
+                    if split_ab:
+                        avecs = self._gapped_encode_tcr_chains(X, 'va', 'cdr3a').astype(np.float32)
+                        bvecs = self._gapped_encode_tcr_chains(X, 'vb', 'cdr3b').astype(np.float32)
+                        return avecs, bvecs
+                    else:
+                        return self._encode_paired_chains(X)
+                else:            
+                    # assert 'v_call' in X.columns, f"DataFrame is missing 'v_call' column."
+                    # assert 'junction_aa' in X.columns, f"DataFrame is missing 'junction_aa' column."
+                    return self._gapped_encode_tcr_chains(X,self.vgene_col,self.cdr3_col).astype(np.float32)
             else:
                 assert 'junction_aa' in X.columns, f"DataFrame does not include column named 'junction_aa'."
                 X = X.junction_aa.to_list()

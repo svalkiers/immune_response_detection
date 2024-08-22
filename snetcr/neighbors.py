@@ -111,7 +111,51 @@ class SneTcrResult:
         encoder = TCRDistEncoder(aa_dim=16, chain=self.chain).fit()
         self.vecs = encoder.transform(self.data)
 
-    def get_clusters(self, r=96):
+    def _index_based_graph(self, r, significant=True):
+
+        if significant:
+            sign = self.data[self.data['evalue'] < .05]
+
+        sign_vecs = self.vecs[sign.index]
+
+        index = faiss.IndexFlatL2(self.vecs.shape[1])
+        index.add(self.vecs)
+
+        lims, D, I = index.range_search(sign_vecs, thresh=r)
+        edges = convert_range_search_output(lims, D, I)
+        edges = [i[0] for i in edges if len(set(i[0])) > 1]
+        nodes = set(list(sign.index) + list(I))
+
+        return edges, nodes
+    
+    def _matrix_based_graph(self, r, significant=True):
+
+        if significant:
+            sign = self.data[self.data['evalue'] < .05]
+
+        dm = compute_sparse_distance_matrix(
+            tcrs=sign, 
+            chain=self.chain, 
+            organism='human', 
+            d=r,
+            m=16,
+            vecs=self.vecs[sign.index]
+            )
+        
+        non_zero_values = dm.data
+        row_indices, col_indices = dm.nonzero()
+
+        mask = (non_zero_values >= 0)
+        filtered_row_indices = row_indices[mask]
+        filtered_col_indices = col_indices[mask]
+        ids = np.column_stack((filtered_row_indices, filtered_col_indices))
+
+        nodes = sign.reset_index(drop=True).index.values
+        edges = [(nodes[i[0]], nodes[i[1]]) for i in ids]   
+        
+        return edges, nodes
+
+    def get_clusters(self, r=96, significant=True, periphery=False):
         '''
         Gets the different SNE clusters.
         Builds a network from sequence neighbors (< r) and partitions
@@ -132,15 +176,41 @@ class SneTcrResult:
 
         Also adds a cluster column to the dataframe.
         '''
+        
         if self.vecs is None:
             self.get_vecs()
 
-        dm = squareform(pdist(self.vecs, metric='euclidean')**2)
-        np.fill_diagonal(dm, -1)
-        ids = np.argwhere((dm <= r) & (dm >= 0))
+        # if significant:
+        #     sign = self.data[self.data['evalue'] < .05]
+
+        # dm = compute_sparse_distance_matrix(
+        #     tcrs=sign, 
+        #     chain=self.chain, 
+        #     organism='human', 
+        #     d=r,
+        #     m=16,
+        #     vecs=self.vecs[sign.index]
+        #     )
         
-        nodes = self.data.index.values
-        edges = [(nodes[i[0]], nodes[i[1]]) for i in ids]
+        # non_zero_values = dm.data
+        # row_indices, col_indices = dm.nonzero()
+
+        # mask = (non_zero_values >= 0)
+        # filtered_row_indices = row_indices[mask]
+        # filtered_col_indices = col_indices[mask]
+        # ids = np.column_stack((filtered_row_indices, filtered_col_indices))
+
+        # dm = squareform(pdist(self.vecs, metric='euclidean')**2)
+        # np.fill_diagonal(dm, -1)
+        # ids = np.argwhere((dm <= r) & (dm >= 0))
+
+        if periphery:
+            edges, nodes = self._index_based_graph(r)
+        else:
+            edges, nodes = self._matrix_based_graph(r)
+        
+        # nodes = sign.reset_index(drop=True).index.values
+        # edges = [(nodes[i[0]], nodes[i[1]]) for i in ids]
         G = nx.Graph()
         G.add_nodes_from(list(nodes))
         G.add_edges_from(edges)
@@ -151,6 +221,7 @@ class SneTcrResult:
         cluster_lists = [[list(nodes)[node] for node in c] for c in list(partition)]
         clusters = {int(j): n for n, i in enumerate(cluster_lists) for j in i}
         self.data['cluster'] = self.data.index.map(clusters)
+        self.data['cluster'] = self.data['cluster'].fillna(-1).astype(int)
 
         return clusters
 
@@ -257,7 +328,7 @@ def neighbor_analysis(tcrs, chain: str, organism: str, radius: Union[float,int],
         if background is None:
             # Create a background data set
             print(f'Creating background data set with {tcrs.shape[0]*depth} TCRs')
-            bgmodel = BackgroundModel(repertoire=tcrs)
+            bgmodel = BackgroundModel(repertoire=tcrs, factor=depth)
             background = bgmodel.shuffle(chain=chain)
 
         # Get the encodings for both chains separately in foreground and background
@@ -303,16 +374,21 @@ def convert_range_search_output(lims, D, I, offset=0):
     result = list(zip(result_indices, result_distances))
     return result
     
-def compute_sparse_distance_matrix(tcrs, chain, organism, exact=True, d=96.5, m=8):
+def compute_sparse_distance_matrix(tcrs, chain, organism, exact=True, d=96.5, m=8, encoder=None, vecs=None):
     '''
     Compute the sparse distance matrix for a set of TCRs.
     '''
-    # Encode the TCRs
+    
     t0 = timer()
-    start = timer()
-    encoder = TCRDistEncoder(aa_dim=m,organism=organism,chain=chain).fit()
-    vecs = encoder.transform(tcrs).astype(np.float32)
-    print(f'Encoding TCRs took {timer()-start:.2f}s')
+
+    if encoder == None:
+        encoder = TCRDistEncoder(aa_dim=m,organism=organism,chain=chain).fit()
+
+    if vecs is None:
+        # Encode the TCRs
+        start = timer()
+        vecs = encoder.transform(tcrs).astype(np.float32)
+        print(f'Encoding TCRs took {timer()-start:.2f}s')
 
     if exact:
         # Flat index will ensure 'exact' search
