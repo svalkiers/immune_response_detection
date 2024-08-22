@@ -69,6 +69,10 @@ python3 run_pipeline.py --filename ./data/test.tsv --chain AB --organism human -
 
 When analyzing **multiple files**, the `-f` or `--filename` should remain **unspecified**. Instead  `-d` or `--directory` should be used.
 
+### Accepted formats
+
+The method accepts data in the [AIRR format](https://docs.airr-community.org/en/stable/datarep/rearrangements.html) or the paired TCRdist format. Data in the AIRR format should contain at least the following columns: *v_call*, *j_call*, *junction*, *junction_aa*. In case of using paired chain data, make sure the AIRR-formated data also includes the columns *cell_id* and *locus*. Data in the paired TCRdist format should contain at least the following columns: *va*, *ja*, *cdr3a*, *cdr3a_nucseq*, *vb*, *jb*, *cdr3b*, *cdr3b_nucseq*.
+
 ### Advanced use (python interface)
 
 Alternatively, the python interface can be used, which allows for more flexibility and provides additional functionalities.  Before trying to run the code, make sure your working directory is correctly configured:
