@@ -2,7 +2,7 @@
 
 ## Description
 
-...
+The **snetcr** library allows for statistical quantification of TCR sequence similarity through enrichment analysis of sequence neighbor counts. **snetcr** builds on the concept of TCR neighborhoods introduced in [Mayer-Blackwell et al. (2021), eLife](https://elifesciences.org/articles/68605). The library makes use of efficient vectorization in order to compute neighbor distributions. In addition it uses a novel strategy for generating TCR repertoire backgrounds that match important properties of the input repertoire such as V/J gene frequency, CDR3 length and non-templated nucleotide insertion in the CDR3. 
 
 ## Installation
 
@@ -25,7 +25,7 @@ To run the code in this repository, use the following instructions:
 4. Activate the environment.
 
    ```sh
-   conda activate immune_response_detection
+   conda activate ird
    ```
 
 ## Use
