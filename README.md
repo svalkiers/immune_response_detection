@@ -149,7 +149,7 @@ data_formatted = formatter.filter_and_format_paired(
     cdr3nt_b_col = 'cdr3b_nucseq', # default
     vgene_b_col = 'vb', # default
     jgene_b_col = 'jb' # default
-)
+)	
 ```
 
 #### Calculating neighbor distributions

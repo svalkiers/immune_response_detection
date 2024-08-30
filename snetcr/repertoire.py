@@ -1,6 +1,7 @@
 import pandas as pd
+import numpy as np
 
-from .constants.preprocessing import IMGT
+from .constants.preprocessing import IMGT, adaptive_to_imgt_human, adaptive_to_imgt_mouse
 from .constants.parsing import (
     _is_cdr3,
     format_junction,
@@ -11,8 +12,9 @@ class Repertoire():
     Repertoire formatter.
     '''
     
-    def __init__(self,data):
+    def __init__(self,data,organism='human'):
         self.data = data
+        self.organism = organism
 
     def filter_and_format_single(
             self,
@@ -38,6 +40,16 @@ class Repertoire():
             }
         
         self.data = self.data.rename(columns=col_remap)
+            
+        if self.data.v_call.str.contains('TCRBV').any():
+            print('Detected Adaptive format')
+            self.data = self.data[self.data.frame_type == 'In']
+            self.data["v_imgt"] = self.data.v_call.map(adaptive_to_imgt_human)
+            self.data["j_call"] = self.data.j_call.map(adaptive_to_imgt_human)
+            # Correct the V allele if available else use IMGT mapping
+            self.data = self.data.dropna(subset=["v_imgt","junction_aa","junction","j_call"])
+            self.data["v_call"] = [self.data.v_imgt.iloc[n].split("*")[0]+f"*0{int(i)}" if not np.isnan(i) else self.data.v_imgt.iloc[n] for n,i in enumerate(self.data.v_allele)]
+            self.data = self.data.drop(columns=["v_imgt"])
 
         # Remove ambiguous CDR3 amino acid sequences
         print("Remove ambiguous CDR3 amino acid sequences")
