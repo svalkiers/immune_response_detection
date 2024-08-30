@@ -82,6 +82,76 @@ import os
 os.chdir(".../github/immune_response_detection/") # Change me
 ```
 
+#### Data formatting
+
+The first important step is correctly formatting the TCR repertoire data. This implies that your data contains TCRs that satisfy the following specific criteria:
+
+- Only canonical CDR3 sequences (N-terminal cysteine (**C**) and C-terminal phenylalanine (**F**), tryptophan (**W**) or cysteine (**C**)) that contain at least 4 and at most 30 amino acids. Non-amino acid characters are not allowed.
+- V/J genes should be IMGT-formatted and must not include non-functional variants (ORFs/pseudogenes).
+- The CDR3 nucleotide sequence should exactly match the CDR3 amino acid sequence.
+
+To facilitate this formatting, you can make use of the `Repertoire` class. 
+
+It is important to distinguish datasets in the single column or paired column format. Note that paired chain data may also be in the single column format, when TCRα and TCRβ chains are linked by the `cell_id`  column. Here are some examples of data in the **single column format**:
+
+```
+# EXAMPLE 1 (TRB only)
+junction_aa	junction	v_call	j_call
+CASSPQFTGSYEQYF	TGCGCCAGCAGCCCCCAGTTCACAGGCTCCTACGAGCAGTACTTC	TRBV4-3*01	TRBJ2-7*01
+CASSSPIAGQSSYEQYF	TGTGCCAGCAGTTCCCCCATAGCGGGACAAAGCTCCTACGAGCAGT...	TRBV28*01	TRBJ2-7*01
+CASSYGQNYNEQFF	TGCGCCAGCAGCTACGGACAGAACTACAATGAGCAGTTCTTC	TRBV5-1*01	TRBJ2-1*01
+...
+
+# EXAMPLE 2 (paired chain, but single column)
+v_call	j_call	junction_aa	cell_id	locus
+TRAV20*01	TRAJ3*01	CAVQAGWEASKIIF	AAGACCTAGTACACCT-1	TRA
+TRAV19*01	TRAJ52*01	CALSEGAGGTSYGKLTF	ACGCCGAGTCTCTTAT-1	TRA
+TRBV13*01	TRBJ2-2*01	CASSLQGAKSTGELFF	AAGACCTAGTACACCT-1	TRB
+...
+```
+
+In contrast, paired column data contains separate columns for TCRα and TCRβ. Here is an example of what the **paired column format** looks like:
+
+```
+# EXAMPLE
+cdr3a	cdr3a_nucseq	va	ja	cdr3b	cdr3b_nucseq	vb	jb
+CVVKILTGGGNKLTF	TGTGTGGTGAAGATACTCACGGGAGGAGGAAACAAACTCACCTTT	TRAV12-1*01	TRAJ10*01	CASSPLADSSGSSYEQYF	TGTGCCAGCTCACCTCTCGCCGACAGCTCAGGGAGCTCCTACGAGCAGTACTTC	TRBV18*01	TRBJ2-7*01
+CILADTGTASKLTF	TGCATCCTGGCCGATACCGGCACTGCCAGTAAACTCACCTTT	TRAV26-2*01	TRAJ44*01	CASKERGGLYEQYF	TGTGCCAGCAAGGAGCGGGGGGGCCTTTACGAGCAGTACTTC	TRBV11-2*01	TRBJ2-7*01
+CALDMDGNTPLVF	TGTGCTCTAGACATGGACGGAAACACACCTCTTGTCTTT	TRAV6*01	TRAJ29*01	CASSPRQGAGANVLTF	TGTGCCAGCAGCCCCAGACAGGGAGCCGGGGCCAACGTCCTGACTTTC	TRBV5-4*01	TRBJ2-6*01
+...
+```
+
+The code block below shows an example of how each of these would be formatted.
+
+```python
+from snetcr.repertoire import Repertoire
+from snetcr import load_test
+
+# EXAMPLE 1: single column format
+data = load_test(column_type='single')
+formatter = Repertoire(data)
+data_formatted = formatter.filter_and_format_single(
+    cdr3aa_col = 'junction_aa', # default
+    cdr3nt_col = 'junction', # default
+    vgene_col = 'v_call', # default
+    jgene_col = 'j_call' # default
+)
+
+# EXAMPLE 2: paired column format
+data = load_test(column_type='paired')
+formatter = Repertoire(data)
+data_formatted = formatter.filter_and_format_paired(
+    cdr3aa_a_col = 'cdr3a', # default
+    cdr3nt_a_col = 'cdr3a_nucseq', # default
+    vgene_a_col = 'va', # default
+    jgene_a_col = 'ja', # default 
+    cdr3aa_b_col = 'cdr3b', # default
+    cdr3nt_b_col = 'cdr3b_nucseq', # default
+    vgene_b_col = 'vb', # default
+    jgene_b_col = 'jb' # default
+)
+```
+
 #### Calculating neighbor distributions
 
 The `find_neighbors` function provides a simple method for calculating the sequence neighbor distribution in your sample at a fixed TCRdist threshold *r*.

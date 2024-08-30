@@ -9,13 +9,12 @@ from .constants.parsing import (
 class Repertoire():
     '''
     Repertoire formatter.
-    Data must be in the AIRR format.
     '''
     
     def __init__(self,data):
         self.data = data
 
-    def filter_and_format(
+    def filter_and_format_single(
             self,
             cdr3aa_col = 'junction_aa',
             cdr3nt_col = 'junction',
@@ -57,6 +56,67 @@ class Repertoire():
         print("Parsing CDR3 nucleotide sequence")
         self.data = format_junction(self.data)
         self.data = self.data.dropna(subset=["junction_aa","junction","v_call","j_call"])
+
+        return self.data
+    
+    def filter_and_format_paired(
+            self,
+            cdr3aa_a_col = 'cdr3a',
+            cdr3nt_a_col = 'cdr3a_nucseq',
+            vgene_a_col = 'va',
+            jgene_a_col = 'ja',
+            cdr3aa_b_col = 'cdr3b',
+            cdr3nt_b_col = 'cdr3b_nucseq',
+            vgene_b_col = 'vb',
+            jgene_b_col = 'jb',
+            remove_nonfunctional=True
+            ):
+        
+        col_remap = {
+            cdr3nt_a_col:"cdr3a",
+            cdr3aa_a_col:"cdr3a_nucseq",
+            vgene_a_col:"va",
+            jgene_a_col:"ja",
+            cdr3nt_b_col:"cdr3b",
+            cdr3aa_b_col:"cdr3b_nucseq",
+            vgene_b_col:"vb",
+            jgene_b_col:"jb",
+            }
+
+        # Remove ambiguous CDR3 amino acid sequences
+        print("Remove ambiguous CDR3 amino acid sequences")
+        self.data = self.data[self.data.cdr3a.apply(lambda cdr3: _is_cdr3(cdr3)) &
+                              self.data.cdr3b.apply(lambda cdr3: _is_cdr3(cdr3))]
+
+        # Remove ORF and non-functional genes
+        print("Parsing V/J genes")
+        if remove_nonfunctional:
+            functional = IMGT[IMGT['fct'].isin(['F','(F)','[F]'])]
+            self.data = self.data[self.data.va.isin(functional.imgt_allele_name) & 
+                                  self.data.vb.isin(functional.imgt_allele_name)]
+        else:
+            # make sure all V genes have IMGT annotation
+            self.data = self.data[self.data.va.isin(IMGT.imgt_allele_name) & 
+                                  self.data.vb.isin(IMGT.imgt_allele_name)]
+        
+        tcra = self.data[['cdr3a','cdr3a_nucseq','va','ja']]
+        tcrb = self.data[['cdr3b','cdr3b_nucseq','vb','jb']]
+        tcra.columns = ['junction_aa','junction','v_call','j_call']
+        tcrb.columns = ['junction_aa','junction','v_call','j_call']
+        tcra = format_junction(tcra)
+        tcrb = format_junction(tcrb)
+        self.data['cdr3a_nucseq'] = tcra['junction']
+        self.data['cdr3b_nucseq'] = tcrb['junction']
+        self.data = self.data.dropna(subset=["cdr3a","cdr3b","cdr3a_nucseq","cdr3b_nucseq","va","ja","vb","jb"])
+
+        # # Apply format_junction directly to the relevant columns
+        # self.data[['cdr3a_nucseq', 'cdr3b_nucseq']] = self.data[['cdr3a', 'cdr3a_nucseq', 'va', 'ja', 'cdr3b', 'cdr3b_nucseq', 'vb', 'jb']].apply(
+        #     lambda x: format_junction(x[['cdr3a', 'cdr3a_nucseq', 'va', 'ja']],'cdr3a','cdr3a_nucseq','va','ja')['junction']
+        #     if x.name == 'cdr3a_nucseq' else format_junction(x[['cdr3b', 'cdr3b_nucseq', 'vb', 'jb']],'cdr3b', 'cdr3b_nucseq', 'vb', 'jb')['junction'], axis=1
+        # )
+
+        return self.data
+
 
     def airr_to_tcrdist_paired(self):
         '''
