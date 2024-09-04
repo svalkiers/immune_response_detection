@@ -1,36 +1,45 @@
 from setuptools import setup, find_packages
 import versioneer
+PACKAGES = find_packages()
 
-# conda package requirements
-requirements = [
-    "python>=3.10",
-    "pip",
-    "numpy",
-    "pandas",
-    "matplotlib",
-    "seaborn",
-    "bitarray",
-    "umap-learn",
-    "tensorflow",
-    "colorcet",
-    "faiss-cpu",
-]
+# read the contents of your README file
+from os import path
+this_directory = path.abspath(path.dirname(__file__))
+with open(path.join(this_directory, 'README.md'), encoding='utf-8') as f:
+    long_description = f.read()
 
-setup(
-    name="RapTCR",
-    version=versioneer.get_version(),
-    cmdclass=versioneer.get_cmdclass(),
-    description="Rapid TCR repertoire visualization and annotation.",
-    license="Proprietary",
-    author="Vincent Van Deuren",
-    author_email="vincent.vandeuren@uantwerpen.be",
-    url="https://github.com/vincentvandeuren/RapTCR",
-    packages=find_packages(),
-    #package_data={"raptcr": ["data/bg_position_matrices.pkl","modules/olga/*",]}, !TODO not forget
-    #include_package_data=True,
-    install_requires=requirements,
-    keywords="",
-    classifiers=[
-        "Programming Language :: Python :: 3.10",
-    ],
-)
+opts = dict(name='snetcr',
+            maintainer='Sebastiaan Valkiers',
+            maintainer_email='sebastiaan.valkiers@uantwerpen.be',
+            description='Pairwise distance calculation and neighborhood enrichment analysis of TCR repertoires',
+            long_description=long_description,
+            long_description_content_type='text/markdown',
+            url='https://github.com/svalkiers/immune_response_detection',
+            license='MIT',
+            author='Sebastiaan Valkiers',
+            author_email='sebastiaan.valkiers@uantwerpen.be',
+            version=versioneer.get_version(),
+            cmdclass=versioneer.get_cmdclass(),
+            packages=PACKAGES,
+            include_package_data=True)
+
+install_reqs = [
+      'python>=3.9',
+      'numpy>=1.23.5'
+      'pandas>=1.5.2',
+      'faiss-cpu=1.7.3',
+      'scipy=1.9.3', 
+      'scikit-learn=1.2.0',
+      'pynndescent=0.5.8',
+      'igraph=0.10.3',
+      'networkx==3.0',
+      'olga==1.2.4',
+      'leidenalg=0.9.1',
+      'logomaker==0.8',
+      'statsmodels=0.14.0',
+      'matplotlib>=3.6.2',
+      'pip'
+      ]
+
+if __name__ == "__main__":
+      setup(**opts, install_requires=install_reqs)
