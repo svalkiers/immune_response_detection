@@ -28,7 +28,13 @@ opts = dict(name='snetcr',
                 'License :: OSI Approved :: MIT License',
                 'Operating System :: OS Independent',
             ],
-            include_package_data=True)
+            include_package_data=True,
+            entry_points={
+                'console_scripts': [
+                    'snetcr=snetcr.run_pipeline:main',  # This defines the 'snetcr' command
+        ],
+        },
+        )
 
 install_reqs = [
       'numpy>=1.23.5',
