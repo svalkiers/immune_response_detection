@@ -201,55 +201,56 @@ def analyze_directory(
     
     return None
 
-parser = argparse.ArgumentParser()
-parser.add_argument('-f', '--filename', type=str, default=None, help="Path to the file that contains the repertoire of interest. \
-    When analyzing multiple files at once, please use the 'directory' argument.")
-parser.add_argument('-d', '--directory', type=str, default=None, help="Path to the directory that contains the repertoires of interest. \
-    When analyzing a single file, please use the 'filename' argument.")
-parser.add_argument('-r', '--radius', default=12.5, help="The radius for defining neighbors. Default is 12.5.")
-parser.add_argument('-q', '--ratio', type=int, default=10, help="The ratio between background and foreground. \
-    Only applicable when no custom background is provided. Default is 10.")
-parser.add_argument('-c', '--chain', type=str, default="B", help="TCR chain. AB for alphabeta. Default is B.")
-parser.add_argument('-s', '--species', type=str, default="human", help="Species. Default is human.")
-parser.add_argument('-x', '--suffix', type=str, default="", help="A suffix to add to the output file name.")
-parser.add_argument('-o', '--outdir', type=str, required=True, help="Path to directory where results will be saved. \
-    If directory is non-existent, a new one will be created.")
-parser.add_argument('--custom_background', default=None, help="The path to a custom background file. ")
-# parser.add_argument('--custom_index', default=None, help="The path to a custom background index file.")
-parser.add_argument('--downsample', type=int, default=None, help="The number of sequences to downsample from the input file. \
-    Default is None.")
-args = parser.parse_args()
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-f', '--filename', type=str, default=None, help="Path to the file that contains the repertoire of interest. \
+        When analyzing multiple files at once, please use the 'directory' argument.")
+    parser.add_argument('-d', '--directory', type=str, default=None, help="Path to the directory that contains the repertoires of interest. \
+        When analyzing a single file, please use the 'filename' argument.")
+    parser.add_argument('-r', '--radius', default=12.5, help="The radius for defining neighbors. Default is 12.5.")
+    parser.add_argument('-q', '--ratio', type=int, default=10, help="The ratio between background and foreground. \
+        Only applicable when no custom background is provided. Default is 10.")
+    parser.add_argument('-c', '--chain', type=str, default="B", help="TCR chain. AB for alphabeta. Default is B.")
+    parser.add_argument('-s', '--species', type=str, default="human", help="Species. Default is human.")
+    parser.add_argument('-x', '--suffix', type=str, default="", help="A suffix to add to the output file name.")
+    parser.add_argument('-o', '--outdir', type=str, required=True, help="Path to directory where results will be saved. \
+        If directory is non-existent, a new one will be created.")
+    parser.add_argument('--custom_background', default=None, help="The path to a custom background file. ")
+    parser.add_argument('--downsample', type=int, default=None, help="The number of sequences to downsample from the input file. \
+        Default is None.")
+    
+    args = parser.parse_args()
 
-radius = float(args.radius)
-ratio = int(args.ratio)
+    radius = float(args.radius)
+    ratio = int(args.ratio)
 
-if args.filename is not None:
-    analyze_file(
-        filename=args.filename,
-        ratio=ratio,
-        radius=radius,
-        chain=args.chain,
-        organism=args.species,
-        suffix=args.suffix,
-        outdir=args.outdir,
-        custom_background=args.custom_background,
-        # custom_index=args.custom_index,
-        downsample=args.downsample
+    if args.filename is not None:
+        analyze_file(
+            filename=args.filename,
+            ratio=ratio,
+            radius=radius,
+            chain=args.chain,
+            organism=args.species,
+            suffix=args.suffix,
+            outdir=args.outdir,
+            custom_background=args.custom_background,
+            downsample=args.downsample
+        )
+    elif args.directory is not None:
+        analyze_directory(
+            indir=args.directory,
+            ratio=ratio,
+            radius=radius,
+            chain=args.chain,
+            organism=args.species,
+            suffix=args.suffix,
+            outdir=args.outdir,
+            custom_background=args.custom_background,
+            downsample=args.downsample
         )
 
-elif args.directory is not None:
-    analyze_directory(
-        indir=args.directory,
-        ratio=ratio,
-        radius=radius,
-        chain=args.chain,
-        organism=args.species,
-        suffix=args.suffix,
-        outdir=args.outdir,
-        custom_background=args.custom_background,
-        custom_index=args.custom_index,
-        downsample=args.downsample
-        )
+if __name__ == "__main__":
+    main()
 
 # if args.filename.split(".")[1] == "tsv":
 #     sep = "\t"

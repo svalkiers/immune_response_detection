@@ -1,32 +1,18 @@
 # Detection of antigen-driven convergent T-cell responses
 
-## Description
+[![PyPI](https://img.shields.io/pypi/v/snetcr.svg)](https://pypi.org/project/snetcr/)
 
 The **snetcr** library allows for statistical quantification of TCR sequence similarity through enrichment analysis of sequence neighbor counts. **snetcr** builds on the concept of TCR neighborhoods introduced in [Mayer-Blackwell et al. (2021), eLife](https://elifesciences.org/articles/68605). The library makes use of efficient vectorization in order to compute neighbor distributions. In addition it uses a novel strategy for generating TCR repertoire backgrounds that match important properties of the input repertoire such as V/J gene frequency, CDR3 length and non-templated nucleotide insertion in the CDR3. 
 
 ## Installation
 
-To run the code in this repository, use the following instructions:
+**snetcr** is available as a [pypi package](https://pypi.org/project/snetcr/). To install the package, simply run:
 
-1. Clone the repository to your local machine:
+```sh
+pip install snetcr
+```
 
-   ```sh
-   git clone https://github.com/svalkiers/immune_response_detection.git
-   ```
-
-2. Navigate to the repository.
-
-3. Create an environment that supports all the dependencies:
-
-   ```sh
-   conda env create --file environment.yml
-   ```
-
-4. Activate the environment.
-
-   ```sh
-   conda activate ird
-   ```
+> ⚠️ **Note:** Make sure you have Fortran compiler like `gfortran`, which is necessary for running certain dependencies of the software.
 
 ## Use
 
@@ -35,7 +21,7 @@ To run the code in this repository, use the following instructions:
 By far the easiest way to run the analysis is through the using of the command line interface, provided through the  `run_pipeline.py` script.
 
 ```
-usage: run_pipeline.py [-h] [-f FILENAME] [-d DIRECTORY] [-r RADIUS] [-q RATIO] [-c CHAIN] [-s SPECIES] [-x SUFFIX] -o OUTDIR [--custom_background CUSTOM_BACKGROUND] [--downsample DOWNSAMPLE]
+usage: snetcr [-h] [-f FILENAME] [-d DIRECTORY] [-r RADIUS] [-q RATIO] [-c CHAIN] [-s SPECIES] [-x SUFFIX] -o OUTDIR [--custom_background CUSTOM_BACKGROUND] [--custom_index CUSTOM_INDEX] [--downsample DOWNSAMPLE]
 
 optional arguments:
   -h, --help            show this help message and exit
@@ -47,7 +33,11 @@ optional arguments:
                         The radius for defining neighbors. Default is 12.5.
   -q RATIO, --ratio RATIO
                         The ratio between background and foreground. Only applicable when no custom background is provided. Default is 10.
-  -s SUFFIX, --suffix SUFFIX
+  -c CHAIN, --chain CHAIN
+                        TCR chain. AB for alphabeta. Default is B.
+  -s SPECIES, --species SPECIES
+                        Species. Default is human.
+  -x SUFFIX, --suffix SUFFIX
                         A suffix to add to the output file name.
   -o OUTDIR, --outdir OUTDIR
                         Path to directory where results will be saved. If directory is non-existent, a new one will be created.
@@ -75,12 +65,7 @@ The method accepts data in the [AIRR format](https://docs.airr-community.org/en/
 
 ### Advanced use (python interface)
 
-Alternatively, the python interface can be used, which allows for more flexibility and provides additional functionalities.  Before trying to run the code, make sure your working directory is correctly configured:
-
-```
-import os
-os.chdir(".../github/immune_response_detection/") # Change me
-```
+Alternatively, the python interface can be used, which allows for more flexibility and provides additional functionalities. 
 
 #### Data formatting
 
