@@ -21,22 +21,28 @@ opts = dict(name='snetcr',
             version=versioneer.get_version(),
             cmdclass=versioneer.get_cmdclass(),
             packages=PACKAGES,
+            python_requires='>=3.9',
+            classifiers=[
+                'Programming Language :: Python :: 3',
+                'Programming Language :: Python :: 3.9',
+                'License :: OSI Approved :: MIT License',
+                'Operating System :: OS Independent',
+            ],
             include_package_data=True)
 
 install_reqs = [
-      'python>=3.9',
-      'numpy>=1.23.5'
+      'numpy>=1.23.5',
       'pandas>=1.5.2',
-      'faiss-cpu=1.7.3',
-      'scipy=1.9.3', 
-      'scikit-learn=1.2.0',
-      'pynndescent=0.5.8',
-      'igraph=0.10.3',
+      'faiss-cpu==1.7.3',
+      'scipy==1.9.3', 
+      'scikit-learn==1.2.0',
+      'pynndescent==0.5.8',
+      'igraph==0.10.3',
       'networkx==3.0',
       'olga==1.2.4',
-      'leidenalg=0.9.1',
+      'leidenalg==0.9.1',
       'logomaker==0.8',
-      'statsmodels=0.14.0',
+      'statsmodels==0.14.0',
       'matplotlib>=3.6.2',
       'pip'
       ]
