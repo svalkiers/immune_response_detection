@@ -50,7 +50,7 @@ install_reqs = [
       'logomaker==0.8',
       'statsmodels==0.14.0',
       'matplotlib>=3.6.2',
-      'parmap=1.6.0',
+      'parmap==1.6.0',
       'pip'
       ]
 
