@@ -28,7 +28,10 @@ opts = dict(name='snetcr',
                 'License :: OSI Approved :: MIT License',
                 'Operating System :: OS Independent',
             ],
-            include_package_data=True,
+            include_package_data=True,  # This ensures non-code files are included
+            package_data={
+                'snetcr': ['constants/data/*.tsv', 'constants/data/*.csv', 'constants/data/*.txt'],
+            },
             entry_points={
                 'console_scripts': [
                     'snetcr=snetcr.run_pipeline:main',  # This defines the 'snetcr' command
