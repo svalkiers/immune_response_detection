@@ -30,7 +30,11 @@ opts = dict(name='snetcr',
             ],
             include_package_data=True,  # This ensures non-code files are included
             package_data={
-                'snetcr': ['constants/data/*.tsv', 'constants/data/*.csv', 'constants/data/*.txt'],
+                'snetcr': [
+                    'constants/data/*.tsv', 
+                    'constants/data/*.csv', 
+                    'constants/data/*.txt',
+                    'constants/modules/*.py',],
             },
             entry_points={
                 'console_scripts': [
