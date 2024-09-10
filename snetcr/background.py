@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import itertools
+import pkg_resources
 
 from concurrent.futures import ThreadPoolExecutor   
 from os.path import dirname, abspath, join
@@ -12,9 +13,11 @@ from .constants.base import AALPHABET
 from .pgen import generate_sequences
 
 
-ROOT = dirname(dirname(dirname(abspath(__file__))))
-MODELS = join(ROOT,'immune_response_detection/snetcr/constants/modules/olga/default_models/human_T_beta/')
-DATADIR = join(ROOT, 'immune_response_detection/snetcr/constants/data/')
+# ROOT = dirname(dirname(dirname(abspath(__file__))))
+# MODELS = join(ROOT, 'snetcr/constants/modules/olga/default_models/human_T_beta/')
+# DATADIR = join(ROOT, 'snetcr/constants/data/')
+MODELS = pkg_resources.resource_filename('snetcr', 'constants/modules/olga/default_models/human_T_beta/')
+DATADIR = pkg_resources.resource_filename('snetcr', 'constants/data/')
 
 def get_vfam(df, vcol='v_call'):
     '''

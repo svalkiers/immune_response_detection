@@ -18,7 +18,7 @@ pip install snetcr
 
 ### Command line interface
 
-By far the easiest way to run the analysis is through the using of the command line interface, provided through the  `run_pipeline.py` script.
+By far the easiest way to run the analysis is through the using of the command line interface.
 
 ```
 usage: snetcr [-h] [-f FILENAME] [-d DIRECTORY] [-r RADIUS] [-q RATIO] [-c CHAIN] [-s SPECIES] [-x SUFFIX] -o OUTDIR [--custom_background CUSTOM_BACKGROUND] [--custom_index CUSTOM_INDEX] [--downsample DOWNSAMPLE]
@@ -52,7 +52,7 @@ optional arguments:
 **Example:**
 
 ```bash
-python3 run_pipeline.py --filename ./data/test.tsv --chain AB --organism human --radius 96 --ratio 10 --suffix result --outdir ./testresult/
+snetcr --filename ./snetcr/data/test.tsv --chain AB --species human --radius 96 --ratio 10 --suffix result --outdir ./testresult/
 ```
 
 **Note:**
