@@ -193,9 +193,15 @@ res.draw_neighborhoods(
 )
 ```
 
-![neighborhoods_network.png](/home/sebastiaan/phd/repositories/immune_response_detection/fig/neighborhoods_network.png)
+![neighborhoods_network.png](./fig/neighborhoods_network.png)
 
 In addition, each cluster can be individually inspected to gain more insight into the V/J gene usage and the CDR3 amino acid motif.
+
+```python
+fig = res.draw_cluster(cluster_id=1)
+```
+
+![neighborhoods_network.png](./fig/cluster_example.png)
 
 #### Calculating the pairwise distance matrix using vectorized TCRdist 
 
