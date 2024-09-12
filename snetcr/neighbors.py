@@ -5,33 +5,52 @@ import faiss
 import time
 import json
 import os
+import faiss
+import networkx as nx
+import leidenalg as la
+import igraph as ig
+import matplotlib.pyplot as plt
 
 from scipy.stats import hypergeom
-from multiprocessing import Pool, cpu_count
 from typing import Union
 from functools import reduce
+from matplotlib.gridspec import GridSpec
+from scipy.sparse import coo_matrix
+from scipy.stats import hypergeom
+from timeit import default_timer as timer
 
 from .encoding import TCRDistEncoder
 from .indexing import IvfIndex, FlatIndex
 from .background import BackgroundModel
+from .repertoire import Repertoire
+from .viz import cdr3_logo
 from .constants.parsing import check_formatting
+from .constants.preprocessing import format_chain
 
-import faiss
-import pandas as pd
-import numpy as np
-import networkx as nx
-import leidenalg as la
-import igraph as ig
+# from snetcr.encoding import TCRDistEncoder
+# from snetcr.constants.preprocessing import format_chain
+# from snetcr.indexing import FlatIndex, IvfIndex
+# from snetcr.background import BackgroundModel
+# from snetcr.repertoire import Repertoire
 
-from scipy.spatial.distance import pdist, squareform
-from scipy.sparse import coo_matrix, lil_matrix, csr_matrix
-from scipy.stats import hypergeom
-from timeit import default_timer as timer
-from snetcr.encoding import TCRDistEncoder
-from snetcr.constants.preprocessing import format_chain
-from snetcr.indexing import FlatIndex, IvfIndex
-from snetcr.background import BackgroundModel
-from snetcr.repertoire import Repertoire
+def modify_edge_weights(graph, operation):
+    for u, v, data in graph.edges(data=True):
+        data['weight'] = operation(data['weight'])
+
+def normalize_between_range(x, min_val, max_val):
+    return ((x - min_val) / (max_val - min_val) * 50) + 5 
+
+def normalize_to_interval(values, new_min=5, new_max=40):
+    """
+    Normalize a list of values to the interval [new_min, new_max].
+    """
+    original_min = min(values)
+    original_max = max(values)
+    
+    if original_min == original_max:
+        raise ValueError("The original values must not all be the same.")
+    
+    return [new_min + (val - original_min) * (new_max - new_min) / (original_max - original_min) for val in values]
 
 class SneTcrResult:
     '''
@@ -70,6 +89,8 @@ class SneTcrResult:
         self.data = sne.reset_index(drop=True)
         self.chain = chain
         self.vecs = vecs
+        self.is_clustered = False
+        self.is_modified = False
 
     def __repr__(self) -> str:
         '''
@@ -93,7 +114,7 @@ class SneTcrResult:
         '''
         Returns the n-th item of the SneTcrResult object.
         '''
-        return self.data[n]
+        return self.data.iloc[n]
     
     def to_df(self) -> pd.DataFrame:
         '''
@@ -111,10 +132,12 @@ class SneTcrResult:
         encoder = TCRDistEncoder(aa_dim=16, chain=self.chain).fit()
         self.vecs = encoder.transform(self.data)
 
-    def _index_based_graph(self, r, significant=True):
+    def _index_based_graph(self, r, significant=True, weighted=True):
 
         if significant:
             sign = self.data[self.data['evalue'] < .05]
+        else:
+            sign = self.data
 
         sign_vecs = self.vecs[sign.index]
 
@@ -123,7 +146,10 @@ class SneTcrResult:
 
         lims, D, I = index.range_search(sign_vecs, thresh=r)
         edges = convert_range_search_output(lims, D, I)
-        edges = [i[0] for i in edges if len(set(i[0])) > 1]
+        if weighted:
+            edges = [i[0] + tuple([i[1]]) for i in edges if len(set(i[0])) > 1]
+        else:
+            edges = [i[0] for i in edges if len(set(i[0])) > 1]
         nodes = set(list(sign.index) + list(I))
 
         return edges, nodes
@@ -132,6 +158,8 @@ class SneTcrResult:
 
         if significant:
             sign = self.data[self.data['evalue'] < .05]
+        else:
+            sign = self.data
 
         dm = compute_sparse_distance_matrix(
             tcrs=sign, 
@@ -151,7 +179,8 @@ class SneTcrResult:
         ids = np.column_stack((filtered_row_indices, filtered_col_indices))
 
         nodes = sign.reset_index(drop=True).index.values
-        edges = [(nodes[i[0]], nodes[i[1]]) for i in ids]   
+
+        edges = [(nodes[i[0]], nodes[i[1]]) for i in ids] 
         
         return edges, nodes
 
@@ -205,25 +234,169 @@ class SneTcrResult:
         # ids = np.argwhere((dm <= r) & (dm >= 0))
 
         if periphery:
-            edges, nodes = self._index_based_graph(r)
+            self.edges, self.nodes = self._index_based_graph(r, significant=significant)
         else:
-            edges, nodes = self._matrix_based_graph(r)
+            self.edges, self.nodes = self._matrix_based_graph(r, significant=significant)
         
         # nodes = sign.reset_index(drop=True).index.values
         # edges = [(nodes[i[0]], nodes[i[1]]) for i in ids]
-        G = nx.Graph()
-        G.add_nodes_from(list(nodes))
-        G.add_edges_from(edges)
+        self.G = nx.Graph()
+        self.G.add_nodes_from(list(self.nodes))
+        self.G.add_weighted_edges_from(self.edges)
 
-        if isinstance(G, (nx.Graph, nx.DiGraph)):
-            G = ig.Graph.from_networkx(G)
-        partition = la.find_partition(G, la.ModularityVertexPartition)
-        cluster_lists = [[list(nodes)[node] for node in c] for c in list(partition)]
+        if isinstance(self.G, (nx.Graph, nx.DiGraph)):
+            self.Gi = ig.Graph.from_networkx(self.G)
+        partition = la.find_partition(self.Gi, la.ModularityVertexPartition)
+        cluster_lists = [[list(self.nodes)[node] for node in c] for c in list(partition)]
         clusters = {int(j): n for n, i in enumerate(cluster_lists) for j in i}
         self.data['cluster'] = self.data.index.map(clusters)
         self.data['cluster'] = self.data['cluster'].fillna(-1).astype(int)
 
+        self.is_clustered = True
+
         return clusters
+
+    def draw_cluster(self, cluster_id, r=12.5):
+        
+        assert self.is_clustered, 'Please run get_clusters() first.'
+
+        cluster = self.data[self.data.cluster == cluster_id]
+
+        fig = plt.figure(figsize=(4,4),dpi=150)
+        gs = GridSpec(10,10)
+
+        main = fig.add_subplot(gs[:8,:])
+
+        logo_v = fig.add_subplot(gs[8:,:2])
+        logo_j = fig.add_subplot(gs[8:,8:])
+        logo_cdr3 = fig.add_subplot(gs[8:,2:8])
+
+        v = cluster.v_call.value_counts()
+        xv = v.index
+        yv = v.values
+        logo_v.bar(x=xv, height=yv, edgecolor='black')
+        logo_v.set_xticklabels(xv, rotation=45, ha='right')
+
+        j = cluster.j_call.value_counts()
+        xj = j.index
+        yj = j.values
+        logo_j.bar(x=xj, height=yj, edgecolor='black')
+        logo_j.set_xticklabels(xj, rotation=45, ha='right')
+        logo_j.yaxis.set_label_position("right")
+        logo_j.yaxis.tick_right()
+
+        pos_matrix = cdr3_logo(cluster, ax=logo_cdr3)
+        logo_cdr3.set_xticks([])
+        logo_cdr3.set_yticks([])
+
+        if self.is_modified:
+            pass
+        else:
+            modify_edge_weights(self.G, lambda x: normalize_between_range(r - x, 0, r))
+            self.is_modified = True
+
+        newnodes = list(cluster.index)
+        newG = self.G.subgraph(newnodes)
+
+        pos = nx.spring_layout(newG, weight='weight')
+        coordinates = np.array(list(pos.values()))
+        x = coordinates[:, 0]
+        y = coordinates[:, 1]
+        c = -np.log10(self.data.loc[newnodes].evalue)
+
+        # def normalize(x, min_val, max_val):
+        #     return ((x - min_val) / (max_val - min_val) * 50) + 5 
+
+        s = np.sqrt(self.data.loc[newnodes].duplicate_count)
+        print(s.min(), s.max())
+        s = normalize_between_range(s, s.min(), s.max())
+
+        nx.draw_networkx_edges(newG, pos, alpha=0.5, width=.5, ax=main)
+        cbar = main.scatter(x,y,s=s,linewidths=0.5,edgecolor='black',alpha=1,c=c,cmap='viridis')
+
+        plt.colorbar(cbar, ax=main, label='-log10(e-value)')
+
+        return fig
+
+    def draw_neighborhoods(self, ax=None, node_size=None, annotate=True):
+
+        layout = self.Gi.layout("graphopt", niter=1000)
+
+        if ax is None:
+            fig, ax = plt.subplots(dpi=150, figsize=(5,5))
+        else:
+            pass
+
+        visual_style = {'edge_width': 0.5,}
+        ig.plot(self.Gi,
+                layout=layout,
+                **visual_style,
+                target=ax)
+
+        x = [i[0] for i in layout]
+        y = [i[1] for i in layout]
+        node_data = self.data.iloc[[i['_nx_name'] for i in self.Gi.vs]]
+        c = -np.log10(node_data.evalue)
+        if node_size is None:
+            s = 15
+        elif isinstance(node_size, str):
+            s = normalize_to_interval(node_data[node_size])
+        else:
+            s = node_size
+
+        cbar = ax.scatter(x, y, c=c, cmap='viridis', s=s, edgecolors='black', linewidths=0.5)
+        plt.colorbar(cbar, ax=ax, label='-log10(e-value)')
+
+        node_data['x_coord'] = x
+        node_data['y_coord'] = y
+
+        if annotate:
+            for clus in node_data.cluster.unique():
+                cluster = node_data[node_data.cluster==clus]
+                ax.text(
+                    x=cluster.x_coord.mean(), 
+                    y=cluster.y_coord.mean(),
+                    s=str(clus),
+                    c='red'
+                )
+
+    # def draw_neighborhoods(self, ax=None, node_size=None, r=12.5):
+
+    #     significant_clusters = self.data[self.data['evalue'] < 0.05]['cluster'].unique()
+    #     indices = self.data[self.data['cluster'].isin(significant_clusters)].index
+
+    #     if self.is_modified:
+    #         pass
+    #     else:
+    #         modify_edge_weights(self.G, lambda x: normalize_between_range(r - x, 0, r))
+    #         self.is_modified = True
+
+    #     newnodes = list(indices)
+    #     newedges = self.G.edges(indices)
+    #     newG = self.G.subgraph(newnodes)
+
+    #     pos = nx.spring_layout(newG, weight='weight', iterations=35)
+    #     coordinates = np.array(list(pos.values()))
+    #     x = coordinates[:, 0]
+    #     y = coordinates[:, 1]
+    #     c = -np.log10(self.data.loc[newnodes].evalue)
+
+    #     if node_size is None:
+    #         s = 15
+    #     elif isinstance(node_size, str):
+    #         s = np.sqrt(self.data.loc[newnodes][node_size])
+    #         s = normalize_between_range(s, s.min(), s.max())
+    #     else:
+    #         s = node_size
+
+    #     if ax is None:
+    #         nx.draw_networkx_edges(newG, pos, alpha=0.5, width=.5)
+    #         cbar = plt.scatter(x,y,s=s,linewidths=0.5,edgecolor='black',alpha=1,c=c,cmap='viridis')
+    #     else:
+    #         nx.draw_networkx_edges(newG, pos, ax=ax, alpha=0.5, width=.5)
+    #         cbar = ax.scatter(x,y,s=s,linewidths=0.5,edgecolor='black',alpha=1,c=c,cmap='viridis')
+
+    #     plt.colorbar(cbar, ax=ax, label='-log10(e-value)')
 
 def neighbor_analysis(tcrs, chain: str, organism: str, radius: Union[float,int], vecs=None, background=None, encoder=None, fgindex=None, bgindex=None, depth: int=10):
     '''
@@ -272,7 +445,7 @@ def neighbor_analysis(tcrs, chain: str, organism: str, radius: Union[float,int],
             print('Encoding TCRs.')
             vecs = encoder.transform(tcrs)
 
-        print('Computing neighbor distribution.')
+        print(f'Computing neighbor distribution for {vecs.shape[0]} TCRs.')
         if fgindex is None:
             fgindex = faiss.IndexFlatL2(vecs.shape[1])
             fgindex.add(vecs)
@@ -285,7 +458,8 @@ def neighbor_analysis(tcrs, chain: str, organism: str, radius: Union[float,int],
         if background is not None:
             print('Background data provided, skipping background generation.')
         else:
-            background = BackgroundModel(tcrs, 10)
+            print(f'Creating background data set with {tcrs.shape[0]} TCRs.')
+            background = BackgroundModel(tcrs, depth)
             bgdata = background.shuffle(chain=chain)
         
         bgvecs = encoder.transform(bgdata)
@@ -294,7 +468,8 @@ def neighbor_analysis(tcrs, chain: str, organism: str, radius: Union[float,int],
             bgindex = faiss.IndexFlatL2(vecs.shape[1])
             bgindex.add(bgvecs)
 
-        lims, D, I = bgindex.range_search(vecs[nonzero], 12.5)
+        print('Estimating expected neighbor distribution.')
+        lims, D, I = bgindex.range_search(vecs[nonzero], radius)
         del bgindex
 
         estimated = neighbor_distr_from_lims(lims)
@@ -381,7 +556,7 @@ def compute_sparse_distance_matrix(tcrs, chain, organism, exact=True, d=96.5, m=
     
     t0 = timer()
 
-    if encoder == None:
+    if encoder is None:
         encoder = TCRDistEncoder(aa_dim=m,organism=organism,chain=chain).fit()
 
     if vecs is None:
@@ -394,8 +569,8 @@ def compute_sparse_distance_matrix(tcrs, chain, organism, exact=True, d=96.5, m=
         # Flat index will ensure 'exact' search
         # However, this is still an approximation of the true TCRdist
         start = timer()
-        index = FlatIndex(encoder=encoder)
-        index.add(tcrs, vecs)
+        idx = faiss.IndexFlatL2(vecs.shape[1])
+        idx.add(vecs)
         print(f'Building the index took {timer()-start:.2f}s')
     else:
         # IVF index
@@ -404,13 +579,16 @@ def compute_sparse_distance_matrix(tcrs, chain, organism, exact=True, d=96.5, m=
         n = round(k/20)+2
         if n > k:
             n = k
-        index = IvfIndex(encoder=encoder, n_centroids=k, n_probe=n)
-        index.add(tcrs, vecs)
+        idx = faiss.index_factory(encoder.m, f"IVF{k},Flat")   
+        idx.nprobe = n
+        idx.add(vecs)
+        # index = IvfIndex(encoder=encoder, n_centroids=k, n_probe=n)
+        # index.add(tcrs, vecs)
         print(f'Building the index took {timer()-start:.2f}s')
 
     # Search index
     start = timer()
-    lims, D, I = index.idx.range_search(vecs, thresh=d)
+    lims, D, I = idx.range_search(vecs, thresh=d)
     print(f'Searching index within radius {d} took {timer()-start:.2f}s')
 
     # Format the results.

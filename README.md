@@ -167,12 +167,35 @@ To add some interpretation to the neighbor counts, you can perform a neighbor en
  )
  ```
 
+##### Clustering
+
 After running the analysis, you can access the data in the `SneTcrResult` object. If you want to perform clustering on the enrichment results, you should run `.get_clusters()` before extracting the results.
 
 ```python
-res.get_clusters() # this will add a 'cluster' column to the results table
+res.get_clusters(
+    periphery = True # if set to True, this will include the 'periphery' (all neighbors) around each SNE
+) # this will add a 'cluster' column to the results table
 clustered_results = res.to_df() # extracts the results table as a pandas.DataFrame
 ```
+
+##### Visualization
+
+After clustering, the results can be visualized as a network:
+
+```python
+import matplotlib.pyplot as plt
+
+fig, ax = plt.subplots(dpi=150, figsize=(4,4))
+res.draw_neighborhoods(
+    ax = ax, 
+    node_size = 'duplicate_count', # Will use the duplicate_count column to set the node size
+    annotate = True # Adds the cluster labels
+)
+```
+
+![neighborhoods_network.png](/home/sebastiaan/phd/repositories/immune_response_detection/fig/neighborhoods_network.png)
+
+In addition, each cluster can be individually inspected to gain more insight into the V/J gene usage and the CDR3 amino acid motif.
 
 #### Calculating the pairwise distance matrix using vectorized TCRdist 
 
@@ -217,4 +240,3 @@ encoder = TCRDistEncoder(
     chain = 'AB'
 )
 ```
-

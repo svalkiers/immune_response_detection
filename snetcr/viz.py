@@ -4,8 +4,6 @@ import pandas as pd
 import numpy as np
 import networkx as nx
 
-from .neighbors import compute_sparse_distance_matrix
-
 def cdr3_logo(cluster, ax, n_trim=0, c_trim=0):
 
     if c_trim > 0:
@@ -39,7 +37,9 @@ def cdr3_logo(cluster, ax, n_trim=0, c_trim=0):
 
 def plot_cluster(cluster, r, chain='B', organism='human', ax=None):
 
-    matrix = compute_sparse_distance_matrix(cluster, chain=chain, organism=organism, d=r+.5)
+    from .neighbors import compute_sparse_distance_matrix
+
+    matrix = compute_sparse_distance_matrix(cluster, chain=chain, organism=organism, d=r+.5, m=16)
 
     non_zero_values = matrix.data
     row_indices, col_indices = matrix.nonzero()
@@ -69,4 +69,3 @@ def plot_cluster(cluster, r, chain='B', organism='human', ax=None):
         nx.draw_networkx_edges(G, pos, ax=ax, alpha=0.5)
         cbar = ax.scatter(x,y,linewidths=0.5,edgecolor='black',alpha=1,c=c,cmap='viridis')
 
-    plt.colorbar(cbar, ax=ax)
