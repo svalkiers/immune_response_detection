@@ -246,7 +246,7 @@ class BackgroundModel():
         for tcr, inds in zip(bg_tcr_tuples, src_junction_indices):
             if len(resamples)%500000==0:
                 if self.verbose:
-                    print(f'{Background.resample_background_tcrs.__name__}: build nucseq_srclist', len(resamples),
+                    print(f'{BackgroundModel.resample_background_tcrs.__name__}: build nucseq_srclist', len(resamples),
                         len(bg_tcr_tuples))
             v,j,cdr3aa,cdr3nt = tcr
             v_nucseq = fg_nucseq_srcs[inds[0]]
@@ -340,7 +340,7 @@ class BackgroundModel():
                     'sum:', bg_ncounts[num] + bad_ncounts[num])
             if fg_ncounts[num] > all_ncounts[num]:
                 if self.verbose:
-                    print(f'{SyntheticBackground.resample_background_tcrs.__name__} dont have enough Ns:',
+                    print(f'{BackgroundModel.resample_background_tcrs.__name__} dont have enough Ns:',
                         num, fg_ncounts[num], '>', all_ncounts[num])
 
         for ii in range(len(bad_resamples)):
@@ -430,6 +430,9 @@ class BackgroundModel():
         depend on the input chain(s). For individual chains, the columns are V gene, J gene, CDR3 amino acid sequence,
         and CDR3 nucleotide sequence. For 'AB' pairs, the columns include these for both chains A and B.
         """
+
+        # Standardize chain selection format
+        chain = format_chain(chain)
 
         if chain in ['A','B','G','D']:
             self._parse_junctions(chain=chain)
