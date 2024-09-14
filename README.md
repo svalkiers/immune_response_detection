@@ -173,6 +173,7 @@ After running the analysis, you can access the data in the `SneTcrResult` object
 
 ```python
 res.get_clusters(
+    r = 96.5,
     periphery = True # if set to True, this will include the 'periphery' (all neighbors) around each SNE
 ) # this will add a 'cluster' column to the results table
 clustered_results = res.to_df() # extracts the results table as a pandas.DataFrame
