@@ -10,6 +10,7 @@ import networkx as nx
 import leidenalg as la
 import igraph as ig
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 from scipy.stats import hypergeom
 from typing import Union
@@ -48,7 +49,7 @@ def normalize_to_interval(values, new_min=5, new_max=40):
     original_max = max(values)
     
     if original_min == original_max:
-        raise ValueError("The original values must not all be the same.")
+        return [new_min] * len(values)
     
     return [new_min + (val - original_min) * (new_max - new_min) / (original_max - original_min) for val in values]
 
@@ -140,12 +141,14 @@ class SneTcrResult:
             sign = self.data
 
         sign_vecs = self.vecs[sign.index]
+        index_remap = {n: i for n, i in enumerate(sign.index)}
 
         index = faiss.IndexFlatL2(self.vecs.shape[1])
         index.add(self.vecs)
 
         lims, D, I = index.range_search(sign_vecs, thresh=r)
         edges = convert_range_search_output(lims, D, I)
+        edges = [((index_remap[u], v), w) for (u, v), w in edges]
         if weighted:
             edges = [i[0] + tuple([i[1]]) for i in edges if len(set(i[0])) > 1]
         else:
@@ -179,8 +182,7 @@ class SneTcrResult:
         ids = np.column_stack((filtered_row_indices, filtered_col_indices))
 
         nodes = sign.reset_index(drop=True).index.values
-
-        edges = [(nodes[i[0]], nodes[i[1]]) for i in ids] 
+        edges = [(int(i[0]),int(i[1]),i[2]) for i in ids]
         
         return edges, nodes
 
@@ -205,6 +207,9 @@ class SneTcrResult:
 
         Also adds a cluster column to the dataframe.
         '''
+
+        if len(self.chain) == 2:
+            self.data = self.data.loc[self.data.groupby('tcr_index')['radius'].idxmin()].reset_index(drop=True)
         
         if self.vecs is None:
             self.get_vecs()
@@ -256,38 +261,90 @@ class SneTcrResult:
 
         return clusters
 
-    def draw_cluster(self, cluster_id, r=12.5):
+    def draw_cluster(self, cluster_id, r=12.5, node_size=None, labels=False):
         
         assert self.is_clustered, 'Please run get_clusters() first.'
 
         cluster = self.data[self.data.cluster == cluster_id]
 
         fig = plt.figure(figsize=(4,4),dpi=150)
-        gs = GridSpec(10,10)
 
-        main = fig.add_subplot(gs[:8,:])
+        if len(self.chain) == 1:
 
-        logo_v = fig.add_subplot(gs[8:,:2])
-        logo_j = fig.add_subplot(gs[8:,8:])
-        logo_cdr3 = fig.add_subplot(gs[8:,2:8])
+            gs = GridSpec(10,10)
+            main = fig.add_subplot(gs[:8,:])
+            logo_v = fig.add_subplot(gs[8:,:2])
+            logo_j = fig.add_subplot(gs[8:,8:])
+            logo_cdr3 = fig.add_subplot(gs[8:,2:8])
 
-        v = cluster.v_call.value_counts()
-        xv = v.index
-        yv = v.values
-        logo_v.bar(x=xv, height=yv, edgecolor='black')
-        logo_v.set_xticklabels(xv, rotation=45, ha='right')
+            v = cluster.v_call.value_counts()
+            xv = v.index
+            yv = v.values
+            logo_v.bar(x=xv, height=yv, edgecolor='black')
+            logo_v.set_xticklabels(xv, rotation=45, ha='right')
 
-        j = cluster.j_call.value_counts()
-        xj = j.index
-        yj = j.values
-        logo_j.bar(x=xj, height=yj, edgecolor='black')
-        logo_j.set_xticklabels(xj, rotation=45, ha='right')
-        logo_j.yaxis.set_label_position("right")
-        logo_j.yaxis.tick_right()
+            j = cluster.j_call.value_counts()
+            xj = j.index
+            yj = j.values
+            logo_j.bar(x=xj, height=yj, edgecolor='black')
+            logo_j.set_xticklabels(xj, rotation=45, ha='right')
+            logo_j.yaxis.set_label_position("right")
+            logo_j.yaxis.tick_right()
 
-        pos_matrix = cdr3_logo(cluster, ax=logo_cdr3)
-        logo_cdr3.set_xticks([])
-        logo_cdr3.set_yticks([])
+            pos_matrix = cdr3_logo(cluster, ax=logo_cdr3)
+            logo_cdr3.set_xticks([])
+            logo_cdr3.set_yticks([])
+        
+        elif len(self.chain) == 2:
+
+            gs = GridSpec(15,10)
+            main = fig.add_subplot(gs[:8,:])
+            vja = fig.add_subplot(gs[9:11,7:])
+            logo_cdr3a = fig.add_subplot(gs[9:11,:5])
+            vjb = fig.add_subplot(gs[13:,7:])
+            logo_cdr3b = fig.add_subplot(gs[13:,:5])
+
+            pivot_table_a = cluster[['va','ja']].pivot_table(index='va', columns='ja', aggfunc='size', fill_value=0)
+            pivot_table_b = cluster[['vb','jb']].pivot_table(index='vb', columns='jb', aggfunc='size', fill_value=0)
+
+            # ALPHA
+            sns.heatmap(pivot_table_a, annot=True, fmt='d', cmap='Blues', ax=vja, annot_kws={"fontsize":5})
+            xlabels = list(pivot_table_a.columns)
+            vja.set_xticks([i+.5 for i in range(len(xlabels))])
+            vja.set_xticklabels(xlabels, fontsize=5, rotation=45)
+            ylabels = list(pivot_table_a.index)
+            vja.set_yticks([i+.5 for i in range(len(ylabels))])
+            vja.set_yticklabels(ylabels, fontsize=5, rotation=45)
+            vja.set_xlabel('')
+            vja.set_ylabel('')
+
+            cluster_a = cluster[['va','ja','cdr3a','cdr3a_nucseq']].rename(
+                columns={'va':'v_call','ja':'j_call','cdr3a':'junction_aa','cdr3a_nucseq':'junction'}
+                )
+            pos_matrix = cdr3_logo(cluster_a, ax=logo_cdr3a)
+            logo_cdr3a.set_xticks([])
+            logo_cdr3a.set_yticks([])
+            logo_cdr3a.set_title(r'CDR3$\alpha$', fontsize=8)
+
+            # BETA
+            sns.heatmap(pivot_table_b, annot=True, fmt='d', cmap='Blues', ax=vjb, annot_kws={"fontsize":5})
+            xlabels = list(pivot_table_b.columns)
+            vjb.set_xticks([i+.5 for i in range(len(xlabels))])
+            vjb.set_xticklabels(xlabels, fontsize=5, rotation=45)
+            ylabels = list(pivot_table_b.index)
+            vjb.set_yticks([i+.5 for i in range(len(ylabels))])
+            vjb.set_yticklabels(ylabels, fontsize=5, rotation=45)
+            vjb.set_xlabel('')
+            vjb.set_ylabel('')
+
+            cluster_b = cluster[['vb','jb','cdr3b','cdr3b_nucseq']].rename(
+                columns={'vb':'v_call','jb':'j_call','cdr3b':'junction_aa','cdr3b_nucseq':'junction'}
+                )
+            pos_matrix = cdr3_logo(cluster_b, ax=logo_cdr3b)
+            logo_cdr3b.set_xticks([])
+            logo_cdr3b.set_yticks([])
+            logo_cdr3b.set_title(r'CDR3$\beta$', fontsize=8)
+
 
         if self.is_modified:
             pass
@@ -302,16 +359,28 @@ class SneTcrResult:
         coordinates = np.array(list(pos.values()))
         x = coordinates[:, 0]
         y = coordinates[:, 1]
-        c = -np.log10(self.data.loc[newnodes].evalue)
+        c = -np.log10(cluster.loc[list(newG.nodes())].evalue)
+        if len(self.chain) == 1:
+            cdr3 = cluster.loc[list(newG.nodes())].junction_aa
+        elif len(self.chain) == 2:
+            cdr3a = cluster.loc[list(newG.nodes())].cdr3a
+            cdr3b = cluster.loc[list(newG.nodes())].cdr3b
+            cdr3 = cdr3a + '_' + cdr3b
 
         # def normalize(x, min_val, max_val):
         #     return ((x - min_val) / (max_val - min_val) * 50) + 5 
+        if node_size is None:
+            s = 15
+        elif isinstance(node_size, str):
+            s = np.sqrt(cluster.loc[list(newG.nodes())][node_size])
+            s = normalize_between_range(s, s.min(), s.max())
+        else:
+            s = node_size
 
-        s = np.sqrt(self.data.loc[newnodes].duplicate_count)
-        print(s.min(), s.max())
-        s = normalize_between_range(s, s.min(), s.max())
-
+        nx.set_node_attributes(newG, dict(zip(newG.nodes(), cdr3)), 'labels')
         nx.draw_networkx_edges(newG, pos, alpha=0.5, width=.5, ax=main)
+        if labels:
+            nx.draw_networkx_labels(newG, pos=pos, labels=nx.get_node_attributes(newG, 'labels'), font_size=4, ax=main)
         cbar = main.scatter(x,y,s=s,linewidths=0.5,edgecolor='black',alpha=1,c=c,cmap='viridis')
 
         plt.colorbar(cbar, ax=main, label='-log10(e-value)')

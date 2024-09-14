@@ -3,6 +3,53 @@ import logomaker
 import pandas as pd
 import numpy as np
 import networkx as nx
+import os
+
+from Bio import AlignIO
+from Bio.Seq import Seq
+from Bio.SeqRecord import SeqRecord
+from Bio.Align.Applications import MafftCommandline
+
+def multiple_sequence_alignment(cdr3s):
+
+    sequences = [SeqRecord(Seq(i),id=f'{n}') for n, i in enumerate(cdr3s)]
+
+    # Run MAFFT for alignment
+    with open("unaligned_sequences.fasta", "w") as output_handle:
+        for seq in sequences:
+            output_handle.write(f">{seq.id}\n{seq.seq}\n")
+    mafft_cline = MafftCommandline(input="unaligned_sequences.fasta")
+    stdout, stderr = mafft_cline()
+
+    # Write aligned sequences to a new file
+    with open("aligned_sequences.fasta", "w") as output_handle:
+        output_handle.write(stdout)
+
+    # Read the aligned sequences
+    alignment = AlignIO.read("aligned_sequences.fasta", "fasta")
+    os.remove("unaligned_sequences.fasta")
+    os.remove("aligned_sequences.fasta")
+
+    return alignment
+
+def position_frequency_matrix(alignment):
+
+    alignment_len = alignment.get_alignment_length()
+
+    # Build position frequency matrix
+    amino_acids = list('ACDEFGHIKLMNPQRSTVWY-')
+    positions = range(alignment_len)
+    pfm = pd.DataFrame(0, index=positions, columns=amino_acids)
+    for record in alignment:
+        for i, aa in enumerate(str(record.seq)):
+            if aa in amino_acids:
+                pfm.at[i, aa] += 1
+            else:
+                pfm.at[i, '-'] += 1  # Treat as gaps or handle accordingly
+    pfm = pfm.div(pfm.sum(axis=1), axis=0)
+    pfm = pfm.fillna(0)
+
+    return pfm
 
 def cdr3_logo(cluster, ax, n_trim=0, c_trim=0):
 
@@ -10,20 +57,23 @@ def cdr3_logo(cluster, ax, n_trim=0, c_trim=0):
         seqs = cluster.junction_aa.apply(lambda x: x[n_trim:-c_trim])
     else:
         seqs = cluster.junction_aa.apply(lambda x: x[n_trim:])
-    seqlen = len(seqs.iloc[0])
-    aas = []
-    for i in seqs:
-        aas += i
-    aas = sorted(list(set(aas)))
 
-    pos_matrix = np.zeros((seqlen,len(aas)))
-    aa_dict = {i:[0]*seqlen for i in aas}
+    alignment = multiple_sequence_alignment(seqs)
+    pos_df = position_frequency_matrix(alignment)
+    
+    # seqlen = len(seqs.iloc[0])
+    # aas = []
+    # for i in seqs:
+    #     aas += i
+    # aas = sorted(list(set(aas)))
 
-    for pos in range(seqlen):
-        aacount = seqs.str[pos].value_counts()
-        for i in aacount.index:
-            aa_dict[i][pos] = aacount[i]
-    pos_df = pd.DataFrame(aa_dict)
+    # pos_matrix = np.zeros((seqlen,len(aas)))
+    # aa_dict = {i:[0]*seqlen for i in aas}
+    # for pos in range(seqlen):
+    #     aacount = seqs.str[pos].value_counts()
+    #     for i in aacount.index:
+    #         aa_dict[i][pos] = aacount[i]
+    # pos_df = pd.DataFrame(aa_dict)
 
     # create Logo object
     logo = logomaker.Logo(

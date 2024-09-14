@@ -1,2 +1,3 @@
 recursive-include snetcr/constants/data *.tsv *.csv *.txt
 recursive-include snetcr/constants/modules *
+recursive-include snetcr/data/ *
