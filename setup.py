@@ -57,6 +57,8 @@ install_reqs = [
       'logomaker==0.8',
       'statsmodels==0.14.0',
       'matplotlib>=3.6.2',
+      'seaborn>=0.13.2',
+      'biopython>=1.84',
       'parmap==1.6.0',
       'pip'
       ]

@@ -14,6 +14,24 @@ pip install snetcr
 
 > ⚠️ **Note:** Make sure you have Fortran compiler like `gfortran`, which is necessary for running certain dependencies of the software.
 
+The package makes use of multiple sequence alignment (MSA) for some of the downstream visualizations. If you wish to use those functionalities, make sure to install the MSA tool.
+
+Linux (Ubuntu):
+
+```bash
+sudo apt-get install mafft
+```
+
+macOS:
+
+```bash
+brew install mafft
+```
+
+Windows:
+
+https://mafft.cbrc.jp/alignment/software/windows_without_cygwin.html
+
 ## Use
 
 ### Command line interface
@@ -199,7 +217,11 @@ res.draw_neighborhoods(
 In addition, each cluster can be individually inspected to gain more insight into the V/J gene usage and the CDR3 amino acid motif.
 
 ```python
-fig = res.draw_cluster(cluster_id=1)
+fig = res.draw_cluster(
+    cluster_id=1, 
+    labels=False, 
+    node_size='duplicate_count'
+)
 ```
 
 ![neighborhoods_network.png](./fig/cluster_example.png)
