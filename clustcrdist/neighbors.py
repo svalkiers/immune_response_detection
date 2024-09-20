@@ -28,11 +28,11 @@ from .viz import cdr3_logo
 from .constants.parsing import check_formatting
 from .constants.preprocessing import format_chain
 
-# from snetcr.encoding import TCRDistEncoder
-# from snetcr.constants.preprocessing import format_chain
-# from snetcr.indexing import FlatIndex, IvfIndex
-# from snetcr.background import BackgroundModel
-# from snetcr.repertoire import Repertoire
+# from clustcrdist.encoding import TCRDistEncoder
+# from clustcrdist.constants.preprocessing import format_chain
+# from clustcrdist.indexing import FlatIndex, IvfIndex
+# from clustcrdist.background import BackgroundModel
+# from clustcrdist.repertoire import Repertoire
 
 def modify_edge_weights(graph, operation):
     for u, v, data in graph.edges(data=True):
@@ -648,7 +648,13 @@ def compute_sparse_distance_matrix(tcrs, chain, organism, exact=True, d=96.5, m=
         n = round(k/20)+2
         if n > k:
             n = k
-        idx = faiss.index_factory(encoder.m, f"IVF{k},Flat")   
+        idx = faiss.index_factory(encoder.m, f"IVF{k},Flat")
+        if vecs.shape[0] > 10000:
+            num_training_samples = int(0.2 * vecs.shape[0])  # Use 20% of vecs for training
+            training_vecs = vecs[np.random.choice(vecs.shape[0], num_training_samples, replace=False)]
+            idx.train(training_vecs)
+        else:
+            idx.train(vecs)
         idx.nprobe = n
         idx.add(vecs)
         # index = IvfIndex(encoder=encoder, n_centroids=k, n_probe=n)

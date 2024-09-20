@@ -8,7 +8,7 @@ this_directory = path.abspath(path.dirname(__file__))
 with open(path.join(this_directory, 'README.md'), encoding='utf-8') as f:
     long_description = f.read()
 
-opts = dict(name='snetcr',
+opts = dict(name='clustcrdist',
             maintainer='Sebastiaan Valkiers',
             maintainer_email='sebastiaan.valkiers@uantwerpen.be',
             description='Pairwise distance calculation and neighborhood enrichment analysis of TCR repertoires',
@@ -30,7 +30,7 @@ opts = dict(name='snetcr',
             ],
             include_package_data=True,  # This ensures non-code files are included
             package_data={
-                'snetcr': [
+                'clustcrdist': [
                     'constants/data/*.tsv', 
                     'constants/data/*.csv', 
                     'constants/data/*.txt',
@@ -38,7 +38,7 @@ opts = dict(name='snetcr',
             },
             entry_points={
                 'console_scripts': [
-                    'snetcr=snetcr.run_pipeline:main',  # This defines the 'snetcr' command
+                    'clustcrdist=clustcrdist.run_pipeline:main',  # This defines the 'clustcrdist' command
         ],
         },
         )

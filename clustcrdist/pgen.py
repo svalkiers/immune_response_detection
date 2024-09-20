@@ -14,10 +14,10 @@ def load_models(chain='B'):
 
     chain = format_chain(chain)
             
-    params_file_name = path.join(DIR,f'snetcr/constants/modules/olga/default_models/human_T_{chainmap[chain]}/model_params.txt')
-    marginals_file_name = path.join(DIR,f'snetcr/constants/modules/olga/default_models/human_T_{chainmap[chain]}/model_marginals.txt')
-    V_anchor_pos_file = path.join(DIR,f'snetcr/constants/modules/olga/default_models/human_T_{chainmap[chain]}/V_gene_CDR3_anchors.csv')
-    J_anchor_pos_file = path.join(DIR,f'snetcr/constants/modules/olga/default_models/human_T_{chainmap[chain]}/J_gene_CDR3_anchors.csv')
+    params_file_name = path.join(DIR,f'clustcrdist/constants/modules/olga/default_models/human_T_{chainmap[chain]}/model_params.txt')
+    marginals_file_name = path.join(DIR,f'clustcrdist/constants/modules/olga/default_models/human_T_{chainmap[chain]}/model_marginals.txt')
+    V_anchor_pos_file = path.join(DIR,f'clustcrdist/constants/modules/olga/default_models/human_T_{chainmap[chain]}/V_gene_CDR3_anchors.csv')
+    J_anchor_pos_file = path.join(DIR,f'clustcrdist/constants/modules/olga/default_models/human_T_{chainmap[chain]}/J_gene_CDR3_anchors.csv')
     
     if chain == 'B':
         genomic_data = load_model.GenomicDataVDJ()

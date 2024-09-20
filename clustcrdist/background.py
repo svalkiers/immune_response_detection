@@ -14,10 +14,10 @@ from .pgen import generate_sequences
 
 
 # ROOT = dirname(dirname(dirname(abspath(__file__))))
-# MODELS = join(ROOT, 'snetcr/constants/modules/olga/default_models/human_T_beta/')
-# DATADIR = join(ROOT, 'snetcr/constants/data/')
-MODELS = pkg_resources.resource_filename('snetcr', 'constants/modules/olga/default_models/human_T_beta/')
-DATADIR = pkg_resources.resource_filename('snetcr', 'constants/data/')
+# MODELS = join(ROOT, 'clustcrdist/constants/modules/olga/default_models/human_T_beta/')
+# DATADIR = join(ROOT, 'clustcrdist/constants/data/')
+MODELS = pkg_resources.resource_filename('clustcrdist', 'constants/modules/olga/default_models/human_T_beta/')
+DATADIR = pkg_resources.resource_filename('clustcrdist', 'constants/data/')
 
 def get_vfam(df, vcol='v_call'):
     '''

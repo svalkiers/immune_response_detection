@@ -3,7 +3,7 @@ from os.path import dirname, abspath, join
 from .base import GAPCHAR
 
 ROOT = dirname(dirname(dirname(abspath(__file__))))
-DATA = join(ROOT, 'snetcr/constants/data')
+DATA = join(ROOT, 'clustcrdist/constants/data')
 
 IMGT = pd.read_csv(join(DATA,'imgt_reference.tsv'), sep='\t')
 mapping = pd.read_csv(join(DATA, 'adaptive_imgt_mapping.csv'))

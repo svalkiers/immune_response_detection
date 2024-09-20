@@ -4,7 +4,7 @@ import numpy as np
 
 from os import path, mkdir, getcwd, listdir
 from typing import Union
-from snetcr.neighbors import neighbor_analysis
+from clustcrdist.neighbors import neighbor_analysis
 
 def parse_separator(filename):
     if filename.split(".")[-1] == "tsv":

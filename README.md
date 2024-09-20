@@ -1,15 +1,15 @@
 # Detection of antigen-driven convergent T-cell responses
 
-[![PyPI](https://img.shields.io/pypi/v/snetcr.svg)](https://pypi.org/project/snetcr/)
+[![PyPI](https://img.shields.io/pypi/v/clustcrdist.svg)](https://pypi.org/project/clustcrdist/)
 
-The **snetcr** library allows for statistical quantification of TCR sequence similarity through enrichment analysis of sequence neighbor counts. **snetcr** builds on the concept of TCR neighborhoods introduced in [Mayer-Blackwell et al. (2021), eLife](https://elifesciences.org/articles/68605). The library makes use of efficient vectorization in order to compute neighbor distributions. In addition it uses a novel strategy for generating TCR repertoire backgrounds that match important properties of the input repertoire such as V/J gene frequency, CDR3 length and non-templated nucleotide insertion in the CDR3. 
+The **clustcrdist** library allows for statistical quantification of TCR sequence similarity through enrichment analysis of sequence neighbor counts. **clustcrdist** builds on the concept of TCR neighborhoods introduced in [Mayer-Blackwell et al. (2021), eLife](https://elifesciences.org/articles/68605). The library makes use of efficient vectorization in order to compute neighbor distributions. In addition it uses a novel strategy for generating TCR repertoire backgrounds that match important properties of the input repertoire such as V/J gene frequency, CDR3 length and non-templated nucleotide insertion in the CDR3. 
 
 ## Installation
 
-**snetcr** is available as a [pypi package](https://pypi.org/project/snetcr/). To install the package, simply run:
+**clustcrdist** is available as a [pypi package](https://pypi.org/project/clustcrdist/). To install the package, simply run:
 
 ```sh
-pip install snetcr
+pip install clustcrdist
 ```
 
 > ⚠️ **Note:** Make sure you have Fortran compiler like `gfortran`, which is necessary for running certain dependencies of the software.
@@ -39,7 +39,7 @@ https://mafft.cbrc.jp/alignment/software/windows_without_cygwin.html
 By far the easiest way to run the analysis is through the using of the command line interface.
 
 ```
-usage: snetcr [-h] [-f FILENAME] [-d DIRECTORY] [-r RADIUS] [-q RATIO] [-c CHAIN] [-s SPECIES] [-x SUFFIX] -o OUTDIR [--custom_background CUSTOM_BACKGROUND] [--custom_index CUSTOM_INDEX] [--downsample DOWNSAMPLE]
+usage: clustcrdist [-h] [-f FILENAME] [-d DIRECTORY] [-r RADIUS] [-q RATIO] [-c CHAIN] [-s SPECIES] [-x SUFFIX] -o OUTDIR [--custom_background CUSTOM_BACKGROUND] [--custom_index CUSTOM_INDEX] [--downsample DOWNSAMPLE]
 
 optional arguments:
   -h, --help            show this help message and exit
@@ -70,7 +70,7 @@ optional arguments:
 **Example:**
 
 ```bash
-snetcr --filename ./snetcr/data/test.tsv --chain AB --species human --radius 96 --ratio 10 --suffix result --outdir ./testresult/
+clustcrdist --filename ./clustcrdist/data/test.tsv --chain AB --species human --radius 96 --ratio 10 --suffix result --outdir ./testresult/
 ```
 
 **Note:**
@@ -127,8 +127,8 @@ CALDMDGNTPLVF	TGTGCTCTAGACATGGACGGAAACACACCTCTTGTCTTT	TRAV6*01	TRAJ29*01	CASSPRQ
 The code block below shows an example of how each of these would be formatted.
 
 ```python
-from snetcr.repertoire import Repertoire
-from snetcr import load_test
+from clustcrdist.repertoire import Repertoire
+from clustcrdist import load_test
 
 # EXAMPLE 1: single column format
 data = load_test(column_type='single')
@@ -160,9 +160,9 @@ data_formatted = formatter.filter_and_format_paired(
 The `find_neighbors` function provides a simple method for calculating the sequence neighbor distribution in your sample at a fixed TCRdist threshold *r*.
 
 ``` python
-from snetcr.datasets import load_test
+from clustcrdist.datasets import load_test
 
-tcrs = snetcr.load_test() # test data -> change to your own data here
+tcrs = clustcrdist.load_test() # test data -> change to your own data here
 nbrs = find_neighbors(
     tcrs = tcrs,
     chain = 'AB',
@@ -175,7 +175,7 @@ nbrs = find_neighbors(
 To add some interpretation to the neighbor counts, you can perform a neighbor enrichment analysis. This will compare the neighbor distribution in the sample with a synthetic background sample to estimate the expected neighbor counts. The code block below shows the most basic example where we run the analysis for a single paired &alpha;&beta; chain repertoire using a TCRdist radius of < 96.
 
  ```python
- from snetcr.neighbors import neighbor_analysis
+ from clustcrdist.neighbors import neighbor_analysis
  
  result = neighbor_analysis(
      tcrs = tcrs,
@@ -231,7 +231,7 @@ fig = res.draw_cluster(
 If you want to calculate the pairwise distances among a set of TCRs, you can simply run the example provided in this code block. This will produce a sparse distance matrix where zero-distances are encoded as -1. Here, *r* will determine the maximum distance that is included. Increasing *r* will slow down the computing time. Note that when *r* is very large, this may result in memory issues.
 
 ```python
-from snetcr.distance import compute_sparse_distance_matrix
+from clustcrdist.distance import compute_sparse_distance_matrix
 
 dm = compute_sparse_distance_matrix(
     tcrs = tcrs,
@@ -246,7 +246,7 @@ dm = compute_sparse_distance_matrix(
 The following functionality allows you to generate a set of background TCRs that match a range of characteristics in the provided data. These include matching **V** and **J** gene frequency, **CDR3 amino acid length** distribution, and the number of **n-inserted nucleotides** in the CDR3. The size of the background can be specified as a factor of the input data. By default, the model will generate a background dataset that is 10x the size of the input data.
 
 ```python
-from snetcr.background import BackgroundModel
+from clustcrdist.background import BackgroundModel
 
 bgmodel = BackgroundModel(
 	repertoire = tcrs,
@@ -261,7 +261,7 @@ background = bgmodel.shuffle(chain='AB') # specify the chain here
 The TCRdist-based encoding *vecTCRdist* is a transformation of the TCRdist distance matrix, that enables accurate approximations of TCRdist distances in euclidean space. *vecTCRdist* captures information from CDR1, CDR2, CDR2.5, and CDR3.
 
 ```python
-from snetcr.encoding import TCRDistEncoder
+from clustcrdist.encoding import TCRDistEncoder
 
 encoder = TCRDistEncoder(
     aa_dim = 8, # number of dimensions per amino acid

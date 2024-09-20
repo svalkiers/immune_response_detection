@@ -52,8 +52,8 @@ def get_config() -> VersioneerConfig:
     cfg.VCS = "git"
     cfg.style = ""
     cfg.tag_prefix = ""
-    cfg.parentdir_prefix = "https://github.com/svalkiers/snetcr-"
-    cfg.versionfile_source = "snetcr/_version.py"
+    cfg.parentdir_prefix = "https://github.com/svalkiers/clustcrdist-"
+    cfg.versionfile_source = "clustcrdist/_version.py"
     cfg.verbose = False
     return cfg
 
