@@ -161,8 +161,9 @@ The `find_neighbors` function provides a simple method for calculating the seque
 
 ``` python
 from clustcrdist.datasets import load_test
+from clustcrdist.neighbors import find_neighbors
 
-tcrs = clustcrdist.load_test() # test data -> change to your own data here
+tcrs = load_test(column_type='paired') # test data -> change to your own data here
 nbrs = find_neighbors(
     tcrs = tcrs,
     chain = 'AB',
