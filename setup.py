@@ -47,7 +47,7 @@ install_reqs = [
       'numpy>=1.23.5',
       'pandas>=1.5.2',
       'faiss-cpu==1.7.3',
-      'scipy==1.9.3', 
+      'scipy>=1.9.3', 
       'scikit-learn==1.2.0',
       'pynndescent==0.5.8',
       'igraph==0.10.3',
