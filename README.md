@@ -157,7 +157,7 @@ data_formatted = formatter.filter_and_format_paired(
 
 #### Calculating neighbor distributions
 
-The `find_neighbors` function provides a simple method for calculating the sequence neighbor distribution in your sample at a fixed TCRdist threshold *r*.
+The `find_neighbors` returns the number of sequence neighbor for each TCR within a fixed TCRdist threshold radius.
 
 ``` python
 from clustcrdist.datasets import load_test
@@ -173,29 +173,30 @@ nbrs = find_neighbors(
 
 #### Sequence neighbor enrichment
 
-To add some interpretation to the neighbor counts, you can perform a neighbor enrichment analysis. This will compare the neighbor distribution in the sample with a synthetic background sample to estimate the expected neighbor counts. The code block below shows the most basic example where we run the analysis for a single paired &alpha;&beta; chain repertoire using a TCRdist radius of < 96.
+To interpret the neighbor counts, `neighbor_analysis` performs a neighbor enrichment analysis. It compares the emperical neighbor distribution in the sample with an estimate the expected neighbor counts in a synthetic background sample. Below, we run the analysis for a single paired αβ chain repertoire using a TCRdist radius of < 96.
 
- ```python
+```python
  from clustcrdist.neighbors import neighbor_analysis
- 
- result = neighbor_analysis(
-     tcrs = tcrs,
-     chain = 'AB', # paired chain (alpha-beta)
-     organism = 'human',
-     radius = 96 # TCRdist distance radius
- )
- ```
+
+tcrs = load_test(column_type='paired') # test data -> change to your own data here
+result = neighbor_analysis(
+    tcrs = tcrs,
+    chain = 'AB', # paired chain (alpha-beta)
+    organism = 'human',
+    radius = 96 # TCRdist distance radius
+)
+```
 
 ##### Clustering
 
-After running the analysis, you can access the data in the `SneTcrResult` object. If you want to perform clustering on the enrichment results, you should run `.get_clusters()` before extracting the results.
+After running the analysis, you can access the data in the `SneTcrResult` object. To to perform clustering on the enrichment results, you should run `.get_clusters()` before extracting the results.
 
 ```python
-res.get_clusters(
+result.get_clusters(
     r = 96.5,
     periphery = True # if set to True, this will include the 'periphery' (all neighbors) around each SNE
 ) # this will add a 'cluster' column to the results table
-clustered_results = res.to_df() # extracts the results table as a pandas.DataFrame
+clustered_results = result.to_df() # extracts the results table as a pandas.DataFrame
 ```
 
 ##### Visualization
@@ -206,9 +207,9 @@ After clustering, the results can be visualized as a network:
 import matplotlib.pyplot as plt
 
 fig, ax = plt.subplots(dpi=150, figsize=(4,4))
-res.draw_neighborhoods(
+result.draw_neighborhoods(
     ax = ax, 
-    node_size = 'duplicate_count', # Will use the duplicate_count column to set the node size
+    node_size = 'num_nbrs', # Will use the duplicate_count column to set the node size
     annotate = True # Adds the cluster labels
 )
 ```
@@ -218,7 +219,7 @@ res.draw_neighborhoods(
 In addition, each cluster can be individually inspected to gain more insight into the V/J gene usage and the CDR3 amino acid motif.
 
 ```python
-fig = res.draw_cluster(
+fig = result.draw_cluster(
     cluster_id=1, 
     labels=False, 
     node_size='duplicate_count'
