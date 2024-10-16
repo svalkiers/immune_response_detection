@@ -230,11 +230,12 @@ fig = result.draw_cluster(
 
 #### Calculating the pairwise distance matrix using vectorized TCRdist 
 
-If you want to calculate the pairwise distances among a set of TCRs, you can simply run the example provided in this code block. This will produce a sparse distance matrix where zero-distances are encoded as -1. Here, *r* will determine the maximum distance that is included. Increasing *r* will slow down the computing time. Note that when *r* is very large, this may result in memory issues.
+The funciton `compute_sparse_distance_matrix` computes pairwise distances among a set of TCRs, retaining only distnaces within the specified radius 'r'. It retursn  a sparse distance matrix where zero-distances are encoded as -1. Here, *r* will determine the maximum distance that is included. Increasing *r* will slow down the computing time. Note that when *r* is very large, available memory resources may be exceeeded. 
 
 ```python
 from clustcrdist.distance import compute_sparse_distance_matrix
 
+tcrs = load_test(column_type='paired') # test data -> change to your own data here
 dm = compute_sparse_distance_matrix(
     tcrs = tcrs,
     chain = 'AB',
@@ -245,11 +246,12 @@ dm = compute_sparse_distance_matrix(
 
 #### Generating background data
 
-The following functionality allows you to generate a set of background TCRs that match a range of characteristics in the provided data. These include matching **V** and **J** gene frequency, **CDR3 amino acid length** distribution, and the number of **n-inserted nucleotides** in the CDR3. The size of the background can be specified as a factor of the input data. By default, the model will generate a background dataset that is 10x the size of the input data.
+The class `BackgroundModel` generates a set of background TCRs that match a range of characteristics in the provided data. These include matching **V** and **J** gene frequency, **CDR3 amino acid length** distribution, and the number of **n-inserted nucleotides** in the CDR3. The size of the background can be specified as a factor of the input data. By default, the model will generate a background dataset that is 10 times the size of the input data.
 
 ```python
 from clustcrdist.background import BackgroundModel
 
+tcrs = load_test(column_type='paired') # test data -> change to your own data here
 bgmodel = BackgroundModel(
 	repertoire = tcrs,
 	factor = 5 # relative to the size of the input data
@@ -267,7 +269,7 @@ from clustcrdist.encoding import TCRDistEncoder
 
 encoder = TCRDistEncoder(
     aa_dim = 8, # number of dimensions per amino acid
-    organism = 'human'
+    organism = 'human',
     chain = 'AB'
 )
 ```
