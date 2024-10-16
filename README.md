@@ -189,7 +189,7 @@ result = neighbor_analysis(
 
 ##### Clustering
 
-After running the analysis, you can access the data in the `SneTcrResult` object. To to perform clustering on the enrichment results, you should run `.get_clusters()` before extracting the results.
+After running the analysis, access the data in the `SneTcrResult` object. To to perform clustering on the enrichment results, run `.get_clusters()` before extracting the results.
 
 ```python
 result.get_clusters(
@@ -216,7 +216,7 @@ result.draw_neighborhoods(
 
 ![neighborhoods_network.png](./fig/neighborhoods_network.png)
 
-In addition, each cluster can be individually inspected to gain more insight into the V/J gene usage and the CDR3 amino acid motif.
+In addition, each cluster can be individually inspected to gain further insight into the V/J gene usage and the CDR3 amino acid motif.
 
 ```python
 fig = result.draw_cluster(
@@ -230,7 +230,7 @@ fig = result.draw_cluster(
 
 #### Calculating the pairwise distance matrix using vectorized TCRdist 
 
-The funciton `compute_sparse_distance_matrix` computes pairwise distances among a set of TCRs, retaining only distnaces within the specified radius 'r'. It retursn  a sparse distance matrix where zero-distances are encoded as -1. Here, *r* will determine the maximum distance that is included. Increasing *r* will slow down the computing time. Note that when *r* is very large, available memory resources may be exceeeded. 
+The function `compute_sparse_distance_matrix` computes pairwise distances among a set of TCRs, retaining only distnaces within the specified radius 'r'. It returns  a sparse distance matrix where zero-distances are encoded as -1. Here, *r* will determine the maximum distance that is included. Increasing *r* will slow down the computing time. Note that when *r* is very large, available memory resources may be exceeeded. 
 
 ```python
 from clustcrdist.distance import compute_sparse_distance_matrix
