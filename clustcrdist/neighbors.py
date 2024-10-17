@@ -164,13 +164,15 @@ class SneTcrResult:
         else:
             sign = self.data
 
+        sign = sign.reset_index().rename(columns={'index':'original_index'})
+        idxmap = dict(zip(sign.index, sign.original_index))
+
         dm = compute_sparse_distance_matrix(
             tcrs=sign, 
             chain=self.chain, 
             organism='human', 
             d=r,
-            m=16,
-            vecs=self.vecs[sign.index]
+            m=16
             )
         
         non_zero_values = dm.data
@@ -182,7 +184,9 @@ class SneTcrResult:
         ids = np.column_stack((filtered_row_indices, filtered_col_indices))
 
         nodes = sign.reset_index(drop=True).index.values
-        edges = [(int(i[0]),int(i[1]),i[2]) for i in ids]
+        nodes = [idxmap[i] for i in nodes]
+        # edges = [(int(i[0]),int(i[1]),i[2]) for i in ids] # For weighted edges --> implement later
+        edges = [(idxmap[int(i[0])],idxmap[int(i[1])],1) for i in ids]
         
         return edges, nodes
 
@@ -961,16 +965,16 @@ def compute_neighborhood_pvalues(
             if count >= min_nbrs:
                 pvalue = poisson.sf(count-1, rate)
                 evalue = pvalue*(len(radii)*num_fg_tcrs)
-                if evalue <= evalue_threshold:
-                    dfl.append(dict(
-                        pvalue=pvalue,
-                        evalue=evalue,
-                        tcr_index=ii,
-                        radius=radii[jj],
-                        num_nbrs=count,
-                        expected_num_nbrs=rate,
-                        bg_nbrs=rate*num_bg_tcrs*num_bg_tcrs/num_fg_tcrs,
-                    ))
+                # if evalue <= evalue_threshold:
+                dfl.append(dict(
+                    pvalue=pvalue,
+                    evalue=evalue,
+                    tcr_index=ii,
+                    radius=radii[jj],
+                    num_nbrs=count,
+                    expected_num_nbrs=rate,
+                    bg_nbrs=rate*num_bg_tcrs*num_bg_tcrs/num_fg_tcrs,
+                ))
 
     results = pd.DataFrame(dfl)
     if results.shape[0]:
