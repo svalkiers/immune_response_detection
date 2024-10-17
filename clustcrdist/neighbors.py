@@ -467,7 +467,7 @@ class SneTcrResult:
 
     #     plt.colorbar(cbar, ax=ax, label='-log10(e-value)')
 
-def neighbor_analysis(tcrs, chain: str, organism: str, radius: Union[float,int], vecs=None, background=None, encoder=None, fgindex=None, bgindex=None, depth: int=10):
+def neighbor_analysis(tcrs, chain: str, organism: str, radius: Union[float,int], vecs=None, background=None, encoder=None, fgindex=None, bgindex=None, depth: int=10, radius_interval=None):
     '''
     Perform a neighborhood analysis on a set of TCRs. TCR neighborhood analysis compares the
     distribution of sequence neighbors within a fixed distance radius against a background dataset.
@@ -582,7 +582,11 @@ def neighbor_analysis(tcrs, chain: str, organism: str, radius: Union[float,int],
         bg_ab_counts = get_background_nbr_counts(avecs,bvecs,avecsbg,bvecsbg,radius)
 
         # Combine all results and compute the neighborhood p-values
-        sne = compute_neighborhood_pvalues(tcrs, fg_results, bg_ab_counts, background.shape[0])
+        if radius_interval is not None:
+            radii = list(range(radius_interval,radius+1,radius_interval))
+        else:
+            radii = [radius]
+        sne = compute_neighborhood_pvalues(tcrs, fg_results, bg_ab_counts, background.shape[0], radii)
 
     return SneTcrResult(sne=sne, chain=chain)
 
