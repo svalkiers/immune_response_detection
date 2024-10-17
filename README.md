@@ -262,7 +262,11 @@ background = bgmodel.shuffle(chain='AB') # specify the chain here
 
 #### *vecTCRdist* (TCRdist-based TCR encoding)
 
-The TCRdist-based encoding *vecTCRdist* is a transformation of the TCRdist distance matrix, that enables accurate approximations of TCRdist distances in euclidean space. *vecTCRdist* captures information from CDR1, CDR2, CDR2.5, and CDR3.
+The TCRdist-based encoding vecTCRdist is a transformation of the TCRdist distance matrix, that enables accurate approximations of TCRdist distances in euclidean space. vecTCRdist captures information from CDR1, CDR2, CDR2.5, and CDR3. By default, the CDR3 region is trimmed at the 3rd and 2nd to final position. Following trimming, gaps are introduced at a fixed position to standardize the length of each sequence. Every amino acid (including the gap character) is mapped to its corresponding numerical vector. These amino acid vectors are concatenated in the same order as they appear in the sequence. To obtain an encoding for each amino acid, we use the rows of the 21 x 21 TCRdist distance matrix, where each row and column represents an amino acid (including one gap character). These will then be projected into a lower dimensional representation using MDS.
+
+![neighborhoods_network.png](./fig/encoding.png)
+
+Below, a basic example of how the encoder can be used:
 
 ```python
 from clustcrdist.encoding import TCRDistEncoder
@@ -272,4 +276,22 @@ encoder = TCRDistEncoder(
     organism = 'human',
     chain = 'AB'
 )
+
+vecs = encoder.fit_transform(tcrs) # Create the vector embeddings
+```
+
+The TCRDistEncoder also offers slightly more advanced parametrization to adjust the trimming of the CDR3 or to assign more relative importance to the V gene region of the TCR:
+
+```python
+encoder = TCRDistEncoder(
+    aa_dim = 8, # number of dimensions per amino acid
+    organism = 'human',
+    chain = 'AB',
+    n_trim = 3, # number of amino acids trimmed from the start
+    c_trim = 2, # number of amino acids trimmed from the end
+    cdr3_weight = 3, # weight assigned to the CDR3 
+    v_weight = 1 # weight assigned to the CDR1, CDR2 and CDR2.5 (V gene)
+)
+
+vecs = encoder.fit_transform(tcrs) # Create the vector embeddings
 ```
