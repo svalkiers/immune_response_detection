@@ -124,35 +124,39 @@ CALDMDGNTPLVF	TGTGCTCTAGACATGGACGGAAACACACCTCTTGTCTTT	TRAV6*01	TRAJ29*01	CASSPRQ
 ...
 ```
 
-The code block below shows an example of how each of these would be formatted.
+The code blocks below shows an example of how the data would be formatted.
 
 ```python
 from clustcrdist.repertoire import Repertoire
-from clustcrdist import load_test
+from clustcrdist.datasets import load_unformatted_example
 
-# EXAMPLE 1: single column format
-data = load_test(column_type='single')
-formatter = Repertoire(data)
+# EXAMPLE: single column format
+data = load_unformatted_example()
+print(data.columns)
+```
+
+```
+Index(['count', 'freq', 'cdr3nt', 'cdr3aa', 'v', 'd', 'j', 'VEnd', 'DStart',
+       'DEnd', 'JStart'],
+      dtype='object')
+```
+
+We then select the relevant columns ('cdr3nt', 'cdr3aa', 'v', 'j') and provide them to the formatter. The formatter will remove any TCR with ORF genes, misannotated V genes or non-canonical CDR3 sequences. If no allele information is provided, *01 will be assumed. The CDR3 nucleotide sequence is trimmed so that it matches the corresponding amino acid sequence. Finally, the TCR columns (when using the single column format) will be converted to the AIRR format.
+```python
 data_formatted = formatter.filter_and_format_single(
-    cdr3aa_col = 'junction_aa', # default
-    cdr3nt_col = 'junction', # default
-    vgene_col = 'v_call', # default
-    jgene_col = 'j_call' # default
+    cdr3aa_col = 'cdr3aa', # default
+    cdr3nt_col = 'cdr3nt', # default
+    vgene_col = 'v', # default
+    jgene_col = 'j' # default
 )
+```
 
-# EXAMPLE 2: paired column format
-data = load_test(column_type='paired')
-formatter = Repertoire(data)
-data_formatted = formatter.filter_and_format_paired(
-    cdr3aa_a_col = 'cdr3a', # default
-    cdr3nt_a_col = 'cdr3a_nucseq', # default
-    vgene_a_col = 'va', # default
-    jgene_a_col = 'ja', # default 
-    cdr3aa_b_col = 'cdr3b', # default
-    cdr3nt_b_col = 'cdr3b_nucseq', # default
-    vgene_b_col = 'vb', # default
-    jgene_b_col = 'jb' # default
-)	
+```
+Remove ambiguous CDR3 amino acid sequences
+Parsing V/J genes
+Removed 230 with non-functional or misannotated V genes.
+Parsing CDR3 nucleotide sequence
+dropped 0 TCRs with ambiguous junctions
 ```
 
 #### Calculating neighbor distributions
@@ -199,6 +203,49 @@ result.get_clusters(
 clustered_results = result.to_df() # extracts the results table as a pandas.DataFrame
 ```
 
+```python
+clustered_results.sort_values('evalue')
+```
+
+```
+          pvalue        evalue  tcr_index  radius  num_nbrs  \
+20  5.875723e-18  2.229249e-14        342      96        13   
+63  9.334463e-18  3.541495e-14       1202      96        14   
+94  3.204331e-16  1.215723e-12       2116      96        12   
+21  3.406484e-16  1.292420e-12        348      96        11   
+22  1.931435e-15  7.327863e-12        353      96         8   
+
+    expected_num_nbrs   bg_nbrs           va         ja             cdr3a  \
+20           0.273160  103637.0    TRAV27*01  TRAJ52*01  CAGESAGGTSYGKLTF   
+63           0.376645  142899.0  TRAV12-2*01  TRAJ23*01      CAVLNQGGKLIF   
+94           0.276310  104832.0  TRAV12-2*01  TRAJ23*01      CAFLGQGGKLIF   
+21           0.195859   74309.0  TRAV12-1*01  TRAJ31*01        CVVNEARLMF   
+22           0.054837   20805.0    TRAV34*01  TRAJ52*01  CGADHAGGTSYGKLTF   
+
+                                        cdr3a_nucseq           vb          jb  \
+20  tgtgcaggagagagcgctggtggtactagctatggaaagctgacattt    TRBV27*01  TRBJ2-1*01   
+63              tgtgccgtgctcaaccagggaggaaagcttatcttc  TRBV11-2*01  TRBJ1-1*01   
+94              tgtgccttccttgggcagggaggaaagcttatcttc  TRBV11-2*01  TRBJ1-1*01   
+21                    tgtgtggtgaacgaggccagactcatgttt  TRBV11-2*01  TRBJ1-1*01   
+22  tgtggagcagaccatgctggtggtactagctatggaaagctgacattt    TRBV27*01  TRBJ2-2*01   
+
+              cdr3b                                   cdr3b_nucseq  cluster  
+20  CASSLMAGGLNEQFF  tgtgccagcagtttaatggcggggggcctgaatgagcagttcttc        3  
+63    CASSLGLNTEAFF        tgtgccagcagcttagggctgaacactgaagctttcttt        1  
+94    CASSLGVNTEAFF        tgtgccagcagcttaggggtgaacactgaagctttcttt        1  
+21    CASSYGVNTEAFF        tgtgccagcagttacggggtgaacactgaagctttcttt        1  
+22  CASRLLAGGIGELFF  tgtgccagcagattactagcgggggggatcggggagctgtttttt        4 
+```
+
+The resulting dataframe will contain all the results from the analysis:
+
+- `pvalue` : uncorrected neighbor enrichment p-value.
+- `evalue` : corrected version of the p-value. This value is obtained by multiplying the p-value by the size of the input data.
+- `tcr_index` : index of the TCR in the original dataframe.
+- `num_nbrs` : observed number of neighbors under the radius.
+- `expected_num_nbrs` : baseline neighbor rate based estimated from the background.
+- `bg_nbrs` : total number of neighbors observed in the background.
+
 ##### Visualization
 
 After clustering, the results can be visualized as a network:
@@ -222,7 +269,7 @@ In addition, each cluster can be individually inspected to gain further insight 
 fig = result.draw_cluster(
     cluster_id=1, 
     labels=False, 
-    node_size='duplicate_count'
+    node_size='num_nbrs'
 )
 ```
 
