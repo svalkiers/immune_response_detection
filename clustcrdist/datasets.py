@@ -9,3 +9,6 @@ def load_test(column_type='single'):
         return pd.read_table(join(DIR, 'data/test_single.tsv'))
     elif column_type == 'paired':
         return pd.read_table(join(DIR, 'data/test_paired.tsv'))
+
+def load_unformatted_example():
+    return pd.read_table(join(DIR, 'data/unformatted_data_example.txt.gz'))
