@@ -57,12 +57,17 @@ class Repertoire():
         
         # Remove ORF and non-functional genes
         print("Parsing V/J genes")
+        self.data['v_call'] = np.where(self.data['v_call'].str.contains('\*'), self.data['v_call'], self.data['v_call'] + '*01')
+        self.data['j_call'] = np.where(self.data['j_call'].str.contains('\*'), self.data['j_call'], self.data['j_call'] + '*01')
+
         if remove_nonfunctional:
+            n = self.data.shape[0]
             functional = IMGT[IMGT['fct'].isin(['F','(F)','[F]'])]
             self.data = self.data[self.data.v_call.isin(functional.imgt_allele_name)]
         else:
             # make sure all V genes have IMGT annotation
             self.data = self.data[self.data.v_call.isin(IMGT.imgt_allele_name)]
+        print(f"Removed {n - self.data.shape[0]} with non-functional or misannotated V genes.")
         
         # Parse junction (CDR3 nucleotide sequence)
         print("Parsing CDR3 nucleotide sequence")
