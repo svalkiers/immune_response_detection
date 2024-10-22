@@ -220,8 +220,7 @@ def find_alternate_alleles_for_tcrs(
         min_better_ratio=10,
         min_better_count=5,
         min_improvement_to_be_called_better=2,
-        verbose=False,
-        very_verbose=False,
+        verbose=False
         ):
     ''' Try looking for cases where an alternate allele explains more of the cdr3_nucseq
     than the current allele (which is probably *01 since 10x usually doesn't provide alleles)
@@ -268,7 +267,7 @@ def find_alternate_alleles_for_tcrs(
             new_tcr.append((v, j, cdr3, cdr3_nucseq))
         new_tcr = tuple(new_tcr)
         if new_tcr != paired_tcr:
-            if very_verbose:
+            if verbose:
                 print('find_alternate_alleles_for_tcrs: old_tcr:', paired_tcr)
                 print('find_alternate_alleles_for_tcrs: new_tcr:', new_tcr)
         new_tcrs.append(new_tcr)
@@ -457,8 +456,9 @@ def parse_tcr_junctions( organism, tcrs):
     dfl = []
 
     for ii, (atcr, btcr) in enumerate(tcrs):
-        if ii%50000==0:
-            print('parse_tcr_junctions:', ii, len(tcrs))
+
+        # if ii%50000==0:
+        #     print('parse_tcr_junctions:', ii, len(tcrs))
 
         results = OrderedDict()
 
@@ -591,7 +591,7 @@ def resample_shuffled_tcr_chains(
 
     if preserve_vj_pairings:
         # setup a mapping from v/j genes to junctions
-        print('create gene --> junctions mapping')  
+        # print('create gene --> junctions mapping')  
         v_gene2junctions, j_gene2junctions = {}, {}
         def trim_allele(g):
             return g[:g.index('*')]
@@ -604,10 +604,10 @@ def resample_shuffled_tcr_chains(
         #debugging
         v_counts = Counter({x:len(y) for x,y in v_gene2junctions.items()})
         j_counts = Counter({x:len(y) for x,y in j_gene2junctions.items()})
-        for v,count in v_counts.most_common():
-            print(f'v_count: {count:5d} {count/len(junctions):.3f} {v}')
-        for j,count in j_counts.most_common():
-            print(f'j_count: {count:5d} {count/len(junctions):.3f} {j}')
+        # for v,count in v_counts.most_common():
+        #     print(f'v_count: {count:5d} {count/len(junctions):.3f} {v}')
+        # for j,count in j_counts.most_common():
+        #     print(f'j_count: {count:5d} {count/len(junctions):.3f} {j}')
         sys.stdout.flush()
 
 
@@ -671,7 +671,7 @@ def resample_shuffled_tcr_chains(
         successes += success
         if success and len(new_tcrs) >= num_samples:
             break
-    print(f'success_rate: {100.0*successes/attempts:.2f}')
+    # print(f'success_rate: {100.0*successes/attempts:.2f}')
     if return_src_junction_indices:
         return new_tcrs, src_junction_indices
     else:

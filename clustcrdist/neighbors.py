@@ -433,6 +433,7 @@ class SneTcrResult:
                     c='red'
                 )
 
+    plt.show()
     # def draw_neighborhoods(self, ax=None, node_size=None, r=12.5):
 
     #     significant_clusters = self.data[self.data['evalue'] < 0.05]['cluster'].unique()
@@ -567,11 +568,14 @@ def neighbor_analysis(tcrs, chain: str, organism: str, radius: Union[float,int],
         if vecs is None:
             if encoder is None:
                 encoder = TCRDistEncoder(aa_dim=8,organism=organism,chain=chain).fit()
-            vecs = encoder.transform(tcrs)
+            avecs, bvecs = encoder.transform(tcrs, split_ab=True)
+            vecs = np.concatenate([avecs,bvecs],axis=1)
         
         # Get the neighbor distribution in the sample
+        t = timer()
         print(f'Computing neighbor distribution for {vecs.shape[0]} TCRs in sample.')
         fg_results = get_foreground_nbr_counts(vecs, radius)
+        print(f'Neighbor distribution calculation took {timer()-t:.2f}s')
 
         if background is None:
             # Create a background data set
@@ -580,9 +584,8 @@ def neighbor_analysis(tcrs, chain: str, organism: str, radius: Union[float,int],
             background = bgmodel.shuffle(chain=chain)
 
         # Get the encodings for both chains separately in foreground and background
-        print('Estimating expected neighbor distribution.')
-        avecs, bvecs = encoder.transform(tcrs, split_ab=True)
         avecsbg, bvecsbg = encoder.transform(background, split_ab=True)
+        print(f'Estimating expected neighbor distribution with the following parameters: dims = {avecs.shape[1]}; maxdist = {radius}.')
         bg_ab_counts = get_background_nbr_counts(avecs,bvecs,avecsbg,bvecsbg,radius)
 
         # Combine all results and compute the neighborhood p-values
@@ -636,7 +639,7 @@ def compute_sparse_distance_matrix(tcrs, chain, organism, exact=True, d=96.5, m=
     if encoder is None:
         encoder = TCRDistEncoder(aa_dim=m,organism=organism,chain=chain).fit()
 
-    if vecs is None:
+    if vecs is None: 
         # Encode the TCRs
         start = timer()
         vecs = encoder.transform(tcrs).astype(np.float32)
@@ -774,13 +777,13 @@ def get_foreground_nbr_counts(
     '''
     qvecs = fg_vecs # could optionally split into batches
 
-    print('start IndexFlatL2 range search', qvecs.shape, fg_vecs.shape)
-    start = timer()
+    # print('start IndexFlatL2 range search', qvecs.shape, fg_vecs.shape)
+    # start = timer()
     idx = faiss.IndexFlatL2(fg_vecs.shape[1])
     idx.add(fg_vecs)
-    print(type(qvecs), type(radius))
+    # print(type(qvecs), type(radius)) # debugging
     lims, D, I = idx.range_search(qvecs, radius)
-    print(f'IndexFlatL2 range search took {timer()-start:.2f}')
+    # print(f'IndexFlatL2 range search took {timer()-start:.2f}')
     return {'lims':lims, 'D':D, 'I':I}
 
 def get_background_nbr_counts(
@@ -834,8 +837,8 @@ def compute_background_single_tcrdist_distributions(
     num_fg = fg_vecs.shape[0]
     num_bg = bg_vecs.shape[0]
     maxdist = int(maxdist+0.1) # confirm int
-    print('compute_background_single_tcrdist_distributions: '
-          f'dim= {dim} maxdist= {maxdist}')
+    # print('compute_background_single_tcrdist_distributions: '
+    #       f'dim= {dim} maxdist= {maxdist}')
     #maxdist_float = maxdist + 0.5
     dist_counts = np.zeros((num_fg, maxdist+1), dtype=int)
 

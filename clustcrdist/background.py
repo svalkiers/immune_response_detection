@@ -57,25 +57,25 @@ def filter_out_bad_genes_and_cdr3s(
     known_v_genes = set(all_genes_df[all_genes_df.region=='V'].id)
     bad_v_genes = set(x.id for x in all_genes_df.itertuples()
                       if x.region == 'V' and '*' in x.cdrs)
-    print('bad_v_genes:', len(bad_v_genes), bad_v_genes)
+    # print('bad_v_genes:', len(bad_v_genes), bad_v_genes)
 
     good_cdr3s_mask = np.array(
         [len(cdr3)>=min_cdr3_len and all(aa in AALPHABET for aa in cdr3)
          for cdr3 in df[cdr3_column]])
-    print('bad_cdr3s in df:', (~good_cdr3s_mask).sum())
+    # print('bad_cdr3s in df:', (~good_cdr3s_mask).sum())
 
     bad_v_genes_mask = df[v_column].isin(bad_v_genes)
-    print('bad_v_genes in df:', bad_v_genes_mask.sum(),
-          df[bad_v_genes_mask][v_column].unique())
+    # print('bad_v_genes in df:', bad_v_genes_mask.sum(),
+    #       df[bad_v_genes_mask][v_column].unique())
 
     unknown_genes_mask = ~df[v_column].isin(known_v_genes)
-    print('unknown_genes in df:', unknown_genes_mask.sum(),
-          df[unknown_genes_mask][v_column].unique())
+    # print('unknown_genes in df:', unknown_genes_mask.sum(),
+    #       df[unknown_genes_mask][v_column].unique())
     if j_column is not None:
         known_j_genes = set(all_genes_df[all_genes_df.region=='J'].id)
         unknown_j_genes_mask = ~df[j_column].isin(known_j_genes)
-        print('unknown_j_genes in df:', unknown_j_genes_mask.sum(),
-              df[unknown_j_genes_mask][j_column].unique())
+        # print('unknown_j_genes in df:', unknown_j_genes_mask.sum(),
+        #       df[unknown_j_genes_mask][j_column].unique())
         unknown_genes_mask |= unknown_j_genes_mask
 
 
@@ -190,7 +190,7 @@ class BackgroundModel():
                 tcr_tuples = self.repertoire[tcr_columns].itertuples(name=None, index=None)
             tcr_tuples = zip(itertools.repeat(None), tcr_tuples)
         elif chain in ['AB','GD']:
-            print(chain)
+            # print(chain)
             # Check formatting
             airr_cols = ['v_call','j_call','junction_aa','junction']
             if all([i in self.repertoire.columns for i in airr_cols]):
@@ -287,7 +287,8 @@ class BackgroundModel():
                         break
 
                 if tries>too_many_tries:
-                    print('WARNING too_many_tries1:', tries)
+                    if self.verbose:
+                        print('WARNING too_many_tries1:', tries)
                     break
                 # swap!
                 dev = sum(abs(fg_lencounts[x]-bg_lencounts[x]) for x in fg_lencounts)
@@ -346,7 +347,8 @@ class BackgroundModel():
         for ii in range(len(bad_resamples)):
             tries += 1
             if tries > too_many_tries:
-                print('WARNING too_many_tries2:', tries)
+                if self.verbose:
+                    print('WARNING too_many_tries2:', tries)
                 break
             iilen = len(bad_resamples[ii][2])
             if bg_lencounts[iilen]==0:

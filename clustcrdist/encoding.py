@@ -235,7 +235,7 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
             pool.close()
             pool.join()
         # print(len(self.tcrs), vec_len)
-        print('Shape of TCR vecs', vecs.shape)
+        # print('Shape of TCR vecs', vecs.shape)
         assert vecs.shape == (len(self.tcrs), vec_len)
         return vecs
 
