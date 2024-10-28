@@ -555,6 +555,7 @@ def neighbor_analysis(tcrs, chain: str, organism: str, radius: Union[float,int],
         sne = _hypergeometric(presne, tcrs.shape[0], bgdata.shape[0])
 
     elif len(chain) > 1:
+        radius = int(radius) # want an integer here
 
         # Make sure the data is in the paired format
         airr_cols = ['v_call','j_call','junction_aa','junction']
@@ -574,7 +575,7 @@ def neighbor_analysis(tcrs, chain: str, organism: str, radius: Union[float,int],
         # Get the neighbor distribution in the sample
         t = timer()
         print(f'Computing neighbor distribution for {vecs.shape[0]} TCRs in sample.')
-        fg_results = get_foreground_nbr_counts(vecs, radius)
+        fg_results = get_foreground_nbr_counts(vecs, radius+0.5)
         print(f'Neighbor distribution calculation took {timer()-t:.2f}s')
 
         if background is None:
@@ -937,6 +938,8 @@ def compute_neighborhood_pvalues(
     is very large the two should give pretty similar results
     '''
     from scipy.stats import poisson
+
+    radii = [int(x) for x in radii] # need integers
 
     # get background counts at radii
     maxdist = max(radii)
