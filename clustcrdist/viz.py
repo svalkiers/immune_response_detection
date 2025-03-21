@@ -119,3 +119,52 @@ def plot_cluster(cluster, r, chain='B', organism='human', ax=None):
         nx.draw_networkx_edges(G, pos, ax=ax, alpha=0.5)
         cbar = ax.scatter(x,y,linewidths=0.5,edgecolor='black',alpha=1,c=c,cmap='viridis')
 
+def simple_beeswarm(y, nbins=None, width=1., jitter=0.1):
+    """
+    Returns x coordinates for the points in ``y``, so that plotting ``x`` and
+    ``y`` results in a bee swarm plot. The points are spread out to avoid overlap,
+    even when many y values are the same or close to each other.
+    
+    Parameters:
+    y : array-like
+        The y values for which x positions are calculated.
+    nbins : int, optional
+        Number of bins used to group y values (for beeswarm).
+    width : float, optional
+        The maximum spread width of the points.
+    jitter : float, optional
+        Random jitter to add to x coordinates to ensure better spread.
+    """
+    y = np.asarray(y)
+    if nbins is None:
+        nbins = np.ceil(len(y) / 6).astype(int)
+
+    # Get upper bounds of bins
+    x = np.zeros(len(y))
+
+    # Calculate histogram bins and counts
+    nn, ybins = np.histogram(y, bins=nbins)
+    nmax = nn.max()
+
+    # Divide indices into bins
+    ibs = []
+    for ymin, ymax in zip(ybins[:-1], ybins[1:]):
+        i = np.nonzero((y >= ymin) & (y <= ymax))[0]
+        ibs.append(i)
+
+    # Assign x indices with added jitter for spread
+    dx = width / (nmax // 2)
+    for i in ibs:
+        yy = y[i]
+        if len(i) > 1:
+            i = i[np.argsort(yy)]
+            # Alternate the spread to left and right
+            j = len(i) % 2
+            a = i[j::2]  # Indices for one side
+            b = i[j+1::2]  # Indices for the other side
+            x[a] = (0.5 + j / 3 + np.arange(len(a))) * dx + np.random.uniform(-jitter, jitter, len(a))
+            x[b] = -(0.5 + j / 3 + np.arange(len(b))) * dx + np.random.uniform(-jitter, jitter, len(b))
+        else:
+            x[i] = np.random.uniform(-width/2, width/2)  # Spread for single points
+
+    return x
