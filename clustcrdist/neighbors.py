@@ -28,12 +28,6 @@ from .viz import cdr3_logo
 from .constants.parsing import check_formatting
 from .constants.preprocessing import format_chain
 
-# from clustcrdist.encoding import TCRDistEncoder
-# from clustcrdist.constants.preprocessing import format_chain
-# from clustcrdist.indexing import FlatIndex, IvfIndex
-# from clustcrdist.background import BackgroundModel
-# from clustcrdist.repertoire import Repertoire
-
 def modify_edge_weights(graph, operation):
     for u, v, data in graph.edges(data=True):
         data['weight'] = operation(data['weight'])
