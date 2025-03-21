@@ -1,8 +1,8 @@
 # apologies: old code, quickly ported...
-import tcrdist
-from tcrdist.all_genes import all_genes # for recognized genes
-from tcrdist.translation import get_translation
-from tcrdist.tcr_sampler import get_j_cdr3_nucseq
+from clustcrdist.constants.modules import tcrdist
+from clustcrdist.constants.modules.tcrdist.all_genes import all_genes # for recognized genes
+from clustcrdist.constants.modules.tcrdist.translation import get_translation
+from clustcrdist.constants.modules.tcrdist.tcr_sampler import get_j_cdr3_nucseq
 import pandas as pd
 
 organism = 'mouse'
@@ -117,6 +117,6 @@ def parse_file(fname):
             tcrs.append(newtcr)
     return tcrs
 
-fname = '/home/pbradley/csdat/hill/1901T-B6_45_1-donor-spleen-A.tsv'
+# fname = '/home/pbradley/csdat/hill/1901T-B6_45_1-donor-spleen-A.tsv'
 
-tcrs = parse_file(fname)
+# tcrs = parse_file(fname)
