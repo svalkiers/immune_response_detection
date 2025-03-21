@@ -222,10 +222,10 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
             vecs = []
             for tcr in tcrs:
                 v, cdr3 = tcr
-                self._gapped_encoder_v_cdr3(tcr)
-                v_vec = np.sqrt(self.v_weight) * self._encode_sequence(self.gene_cdr_strings[v])
-                cdr3_vec = np.sqrt(self.cdr3_weight) * self._gapped_encode_cdr3(cdr3)
-                vecs.append(np.concatenate([v_vec, cdr3_vec]))
+                vcdr3vec = self._gapped_encoder_v_cdr3(tcr)
+                # v_vec = np.sqrt(self.v_weight) * self._encode_sequence(self.gene_cdr_strings[v])
+                # cdr3_vec = np.sqrt(self.cdr3_weight) * self._gapped_encode_cdr3(cdr3)
+                vecs.append(vcdr3vec)
             vecs = np.array(vecs)
         # Parallel processing, use n cores equal to self.ncpus
         else:
@@ -240,11 +240,21 @@ class TCRDistEncoder(BaseEstimator, TransformerMixin):
         return vecs
 
     def encode_tcr(self, v, cdr3):
+        """
+        Convert a V gene and CDR3 of variable length to a fixed-length vector
+        by trimming/gapping and then lining up the aa_vectors.
+        """
         v_vec = self._encode_sequence(self.gene_cdr_strings[v])
         cdr3_vec = np.sqrt(self.cdr3_weight) * self._gapped_encode_cdr3(cdr3)
         return np.concatenate([v_vec,cdr3_vec])
     
     def _encode_paired_chains(self, tcrs):
+        """
+        Build a TCRdist vector for paired alpha and beta chains.
+
+        Uses a list of TCRs with columns 'va', 'cdr3a', 'vb', 'cdr3b'.
+        Encodes the alpha and beta chains separately and concatenates the vectors.
+        """
         avecs = self._gapped_encode_tcr_chains(tcrs[['va','cdr3a']],'va','cdr3a').astype(np.float32)
         bvecs = self._gapped_encode_tcr_chains(tcrs[['vb','cdr3b']],'vb','cdr3b').astype(np.float32)
         # Concatenate alpha & beta vectors
