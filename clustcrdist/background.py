@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from os.path import dirname, abspath, join
 from collections import Counter
 
-from .constants.modules.tcrdist.tcr_sampler import parse_tcr_junctions,  resample_shuffled_tcr_chains
+from .constants.modules.tcrdist.tcr_sampler import parse_tcr_junctions,  resample_shuffled_tcr_chains, find_alternate_alleles_for_tcrs
 from .constants.preprocessing import format_chain
 from .constants.base import AALPHABET
 from .pgen import generate_sequences
@@ -91,7 +91,8 @@ class BackgroundModel():
         v_column:str='v_call',
         j_column:str='j_call',
         cdr3nt_column:str='junction',
-        cdr3aa_column:str='junction_aa', 
+        cdr3aa_column:str='junction_aa',
+        fix_alleles:bool=False,
         verbose=False
         ):
         '''
@@ -106,6 +107,7 @@ class BackgroundModel():
         self.size = len(self.repertoire)
         self.n = self.size * self.factor
         self._setup_gene_ref()
+        self.fix_alleles = fix_alleles
 
         # Prepare gene columns
         self.v_column = v_column
@@ -206,6 +208,14 @@ class BackgroundModel():
             tcr_tuples_ag = ag.itertuples(name=None, index=None)
             tcr_tuples_bd = bd.itertuples(name=None, index=None)
             tcr_tuples = zip(tcr_tuples_ag, tcr_tuples_bd)
+
+            if self.fix_alleles:
+                #print('Fixing up the alleles!')
+                tcr_tuples_fixed = find_alternate_alleles_for_tcrs(
+                    self.organism, list(tcr_tuples), verbose=True)
+                tcr_tuples = tcr_tuples_fixed
+                tcr_tuples_ag = [x[0] for x in tcr_tuples_fixed]
+                tcr_tuples_bd = [x[1] for x in tcr_tuples_fixed]
 
         self.junctions = parse_tcr_junctions(self.organism, list(tcr_tuples))
         #junctions = add_vdj_splits_info_to_junctions(junctions)
