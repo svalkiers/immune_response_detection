@@ -28,12 +28,6 @@ from .viz import cdr3_logo
 from .constants.parsing import check_formatting
 from .constants.preprocessing import format_chain
 
-# from clustcrdist.encoding import TCRDistEncoder
-# from clustcrdist.constants.preprocessing import format_chain
-# from clustcrdist.indexing import FlatIndex, IvfIndex
-# from clustcrdist.background import BackgroundModel
-# from clustcrdist.repertoire import Repertoire
-
 def modify_edge_weights(graph, operation):
     for u, v, data in graph.edges(data=True):
         data['weight'] = operation(data['weight'])
@@ -190,7 +184,7 @@ class SneTcrResult:
         
         return edges, nodes
 
-    def get_clusters(self, r=96, significant=True, periphery=False):
+    def get_clusters(self, r=96, significant=True, periphery=False, resolution=0.1):
         '''
         Gets the different SNE clusters.
         Builds a network from sequence neighbors (< r) and partitions
@@ -255,7 +249,9 @@ class SneTcrResult:
 
         if isinstance(self.G, (nx.Graph, nx.DiGraph)):
             self.Gi = ig.Graph.from_networkx(self.G)
-        partition = la.find_partition(self.Gi, la.ModularityVertexPartition)
+        partition = la.CPMVertexPartition(self.Gi, resolution_parameter = resolution)
+        optimiser = la.Optimiser()
+        diff = optimiser.optimise_partition(partition)
         cluster_lists = [[list(self.nodes)[node] for node in c] for c in list(partition)]
         clusters = {int(j): n for n, i in enumerate(cluster_lists) for j in i}
         self.data['cluster'] = self.data.index.map(clusters)
@@ -266,6 +262,23 @@ class SneTcrResult:
         return clusters
 
     def draw_cluster(self, cluster_id, r=12.5, node_size=None, labels=False):
+
+        """
+        Draw a selected cluster from the SNE TCRs.
+
+        Parameters
+        ----------
+
+        cluster_id : int
+            The ID of the cluster to draw. This can be derived from the results dataframe or
+            the draw_neighborhoods() visualization.
+        r : float, optional
+            The radius of the neighborhood graph.
+        node_size : str, optional
+            The column in the data frame to use for the node size. If None, all nodes are the same size.
+        labels : bool, optional
+            Whether to label the nodes with their CDR3 sequences.
+        """
         
         assert self.is_clustered, 'Please run get_clusters() first.'
 
@@ -371,8 +384,6 @@ class SneTcrResult:
             cdr3b = cluster.loc[list(newG.nodes())].cdr3b
             cdr3 = cdr3a + '_' + cdr3b
 
-        # def normalize(x, min_val, max_val):
-        #     return ((x - min_val) / (max_val - min_val) * 50) + 5 
         if node_size is None:
             s = 15
         elif isinstance(node_size, str):
@@ -391,8 +402,26 @@ class SneTcrResult:
 
         return fig
 
-    def draw_neighborhoods(self, ax=None, node_size=None, annotate=True):
+    def draw_neighborhoods(self, ax=None, node_size=None, annotate=True, color=None, annot_font_size=6, annot_text_color='red'):
+        """
+        Draw a neighborhood graph of the SNE TCRs.
 
+        Parameters
+        ----------
+
+        ax : matplotlib.axes.Axes, optional
+            The axes on which to draw the graph. If None, a new figure is created.
+        node_size : str, optional
+            The column in the data frame to use for the node size. If None, all nodes are the same size.
+        annotate : bool, optional
+            Whether to annotate the clusters with their cluster number.
+        color : str, optional
+            The column in the data frame to use for the node color. If None, all nodes are the same color.
+        annot_font_size : int, optional
+            The font size of the cluster annotations.
+        annot_text_color : str, optional
+            The color of the cluster annotations.
+        """
         layout = self.Gi.layout("graphopt", niter=1000)
 
         if ax is None:
@@ -417,8 +446,12 @@ class SneTcrResult:
         else:
             s = node_size
 
-        cbar = ax.scatter(x, y, c=c, cmap='viridis', s=s, edgecolors='black', linewidths=0.5)
-        plt.colorbar(cbar, ax=ax, label='-log10(e-value)')
+        if color is not None:
+            ax.scatter(x, y, c=c, s=s, edgecolors='black', linewidths=0.5)
+        else:
+            cbar = ax.scatter(x, y, c=c, cmap='viridis', s=s, edgecolors='black', linewidths=0.5)
+            plt.colorbar(cbar, ax=ax, label='-log10(e-value)')
+            
 
         node_data['x_coord'] = x
         node_data['y_coord'] = y
@@ -430,47 +463,11 @@ class SneTcrResult:
                     x=cluster.x_coord.mean(), 
                     y=cluster.y_coord.mean(),
                     s=str(clus),
-                    c='red'
+                    c=annot_text_color,
+                    fontsize=annot_font_size
                 )
 
     plt.show()
-    # def draw_neighborhoods(self, ax=None, node_size=None, r=12.5):
-
-    #     significant_clusters = self.data[self.data['evalue'] < 0.05]['cluster'].unique()
-    #     indices = self.data[self.data['cluster'].isin(significant_clusters)].index
-
-    #     if self.is_modified:
-    #         pass
-    #     else:
-    #         modify_edge_weights(self.G, lambda x: normalize_between_range(r - x, 0, r))
-    #         self.is_modified = True
-
-    #     newnodes = list(indices)
-    #     newedges = self.G.edges(indices)
-    #     newG = self.G.subgraph(newnodes)
-
-    #     pos = nx.spring_layout(newG, weight='weight', iterations=35)
-    #     coordinates = np.array(list(pos.values()))
-    #     x = coordinates[:, 0]
-    #     y = coordinates[:, 1]
-    #     c = -np.log10(self.data.loc[newnodes].evalue)
-
-    #     if node_size is None:
-    #         s = 15
-    #     elif isinstance(node_size, str):
-    #         s = np.sqrt(self.data.loc[newnodes][node_size])
-    #         s = normalize_between_range(s, s.min(), s.max())
-    #     else:
-    #         s = node_size
-
-    #     if ax is None:
-    #         nx.draw_networkx_edges(newG, pos, alpha=0.5, width=.5)
-    #         cbar = plt.scatter(x,y,s=s,linewidths=0.5,edgecolor='black',alpha=1,c=c,cmap='viridis')
-    #     else:
-    #         nx.draw_networkx_edges(newG, pos, ax=ax, alpha=0.5, width=.5)
-    #         cbar = ax.scatter(x,y,s=s,linewidths=0.5,edgecolor='black',alpha=1,c=c,cmap='viridis')
-
-    #     plt.colorbar(cbar, ax=ax, label='-log10(e-value)')
 
 def neighbor_analysis(tcrs, chain: str, organism: str, radius: Union[float,int], vecs=None, background=None, encoder=None, fgindex=None, bgindex=None, depth: int=10, radius_interval=None):
     '''

@@ -90,23 +90,32 @@ class Repertoire():
             ):
         
         col_remap = {
-            cdr3nt_a_col:"cdr3a",
-            cdr3aa_a_col:"cdr3a_nucseq",
+            cdr3nt_a_col:"cdr3a_nucseq",
+            cdr3aa_a_col:"cdr3a",
             vgene_a_col:"va",
             jgene_a_col:"ja",
-            cdr3nt_b_col:"cdr3b",
-            cdr3aa_b_col:"cdr3b_nucseq",
+            cdr3nt_b_col:"cdr3b_nucseq",
+            cdr3aa_b_col:"cdr3b",
             vgene_b_col:"vb",
             jgene_b_col:"jb",
             }
+
+        # Rename the columns
+        self.data = self.data.rename(columns=col_remap)
 
         # Remove ambiguous CDR3 amino acid sequences
         print("Remove ambiguous CDR3 amino acid sequences")
         self.data = self.data[self.data.cdr3a.apply(lambda cdr3: _is_cdr3(cdr3)) &
                               self.data.cdr3b.apply(lambda cdr3: _is_cdr3(cdr3))]
 
-        # Remove ORF and non-functional genes
         print("Parsing V/J genes")
+        # Add allele info if missing
+        self.data['va'] = np.where(self.data['va'].str.contains('\*'), self.data['va'], self.data['va'] + '*01')
+        self.data['vb'] = np.where(self.data['vb'].str.contains('\*'), self.data['vb'], self.data['vb'] + '*01')
+        self.data['ja'] = np.where(self.data['ja'].str.contains('\*'), self.data['ja'], self.data['ja'] + '*01')
+        self.data['jb'] = np.where(self.data['jb'].str.contains('\*'), self.data['jb'], self.data['jb'] + '*01')
+
+        # Remove ORF and non-functional genes
         if remove_nonfunctional:
             functional = IMGT[IMGT['fct'].isin(['F','(F)','[F]'])]
             self.data = self.data[self.data.va.isin(functional.imgt_allele_name) & 

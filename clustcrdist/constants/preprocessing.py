@@ -2,15 +2,17 @@ import pandas as pd
 from os.path import dirname, abspath, join
 from .base import GAPCHAR
 
+# Define global variables
+# PATHS
 ROOT = dirname(dirname(dirname(abspath(__file__))))
 DATA = join(ROOT, 'clustcrdist/constants/data')
 
+# Load IMGT reference files
+# and mapping file to convert adaptive format to IMGT
 IMGT = pd.read_csv(join(DATA,'imgt_reference.tsv'), sep='\t')
 mapping = pd.read_csv(join(DATA, 'adaptive_imgt_mapping.csv'))
-
 adaptive_to_imgt_human = mapping.loc[mapping['species'] == 'human'].set_index('adaptive')['imgt'].fillna('NA').to_dict()
 adaptive_to_imgt_mouse = mapping.loc[mapping['species'] == 'mouse'].set_index('adaptive')['imgt'].fillna('NA').to_dict()
-
 v_fam_freq = pd.read_csv(join(DATA,"adaptive_v_fam_to_imgt_gene.txt"), sep="\t")
 adaptive_vfam_mapping = dict(zip(v_fam_freq.adaptive_v_family, v_fam_freq.imgt_v_allele))
 
@@ -22,6 +24,9 @@ def vgene_to_cdr():
     return pd.read_csv(join(DATA,'vgene_to_cdr.txt'), sep='\t')
 
 def get_gene_reference():
+    '''
+    Load gene reference file that contains amino acid information about V, D and J genes.
+    '''
     return pd.read_csv(join(DATA,'combo_xcr.tsv'), sep='\t')
 
 def add_cdr_columns(df:pd.DataFrame, vcol:str='v_call') -> pd.DataFrame:
@@ -34,6 +39,9 @@ def add_cdr_columns(df:pd.DataFrame, vcol:str='v_call') -> pd.DataFrame:
     return df
 
 def to_tcrdist3_format(df:pd.DataFrame, vgenecol:str='v_call', jgenecol:str='j_call', cdr3col:str='junction_aa'):
+    '''
+    Helper function to rename columns to tcrdist3 format.
+    '''
     return df.rename(columns={
         vgenecol:'v_b_gene',
         jgenecol:'j_b_gene',
@@ -135,23 +143,35 @@ def setup_gene_cdr_strings(organism:str='human', chain:str='B'):
     return gene_cdr_strings
 
 def detect_vgene_col(df):
+    '''
+    Detect V gene column based on IMGT-formatted V genes.
+    '''
     pattern = r'TR[A,B,G,D]V'
     matching_columns = [column for column in df.columns if df[column].astype(str).str.contains(pattern, regex=True).all()]
-    if len(matching_columns) == 1:
-        print("Autodetected V gene column:", matching_columns[0])
-        return matching_columns[0]
-    elif len(matching_columns) == 0:
-        raise ValueError("No V gene column detected. If your dataframe contains V gene information, please make sure it is IMGT-formatted.")
+    if 'v_call' not in df.columns:
+        if len(matching_columns) == 1:
+            print("Autodetected V gene column:", matching_columns[0])
+            return matching_columns[0]
+        elif len(matching_columns) == 0:
+            raise ValueError("No V gene column detected. If your dataframe contains V gene information, please make sure it is IMGT-formatted.")
+        else:
+            raise ValueError("Multiple V gene columns detected. Please specify the correct column name.")
     else:
-        raise ValueError("Multiple V gene columns detected. Please specify the correct column name.")
+        return 'v_call'
 
 def detect_cdr3_col(df):
+    '''
+    Detect CDR3 column.
+    '''
     pattern = r'^[CW].*[FWC]$'
     matching_columns = [column for column in df.columns if df[column].astype(str).str.contains(pattern, regex=True).all()]
-    if len(matching_columns) == 1:
-        print("Autodetected CDR3AA column:", matching_columns[0])
-        return matching_columns[0]
-    elif len(matching_columns) == 0:
-        raise ValueError("No CDR3 column detected. Please make sure your dataframe contains a column with CDR3 sequences or specify the column name.")
+    if 'junction_aa' not in df.columns:
+        if len(matching_columns) == 1:
+            print("Autodetected CDR3AA column:", matching_columns[0])
+            return matching_columns[0]
+        elif len(matching_columns) == 0:
+            raise ValueError("No CDR3 column detected. Please make sure your dataframe contains a column with CDR3 sequences or specify the column name.")
+        else:
+            raise ValueError("Multiple CDR3 columns detected. Please specify the correct column name.")
     else:
-        raise ValueError("Multiple CDR3 columns detected. Please specify the correct column name.")
+        return 'junction_aa'
